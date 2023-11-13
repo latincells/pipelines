@@ -1,0 +1,15 @@
+conda create -n LatinCells -y
+conda activate LatinCells
+conda install -c conda-forge r-seurat -y # 4.3.0.1
+conda install -c bioconda bioconductor-scdblfinder #1.14.0
+conda install -c conda-forge r-soupx  # 1.6.2 
+conda install -c bioconda bioconductor-dropletutils # 1.20.0
+conda install -c bioconda bioconductor-preprocesscore # 1.62.1
+conda install -c bioconda r-harmony
+conda install -c conda-forge r-clustree
+conda install -c bioconda bioconductor-singler
+conda install -c bioconda bioconductor-celldex
+conda install -c bioconda bioconductor-rols
+conda install -c bioconda bioconductor-go.db
+conda install -c conda-forge r-xml2
+#conda env export > LatinCells.yml
