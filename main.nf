@@ -3,10 +3,7 @@ nextflow.enable.dsl=2
 // Mandatory Params
 params.dataDir = "prueba/*" // Raw reads a analizar
 params.outdir = "LatinCells_pipeline" // Directorio donde se guardaran archivos de interes
-params.conda_envs_dir ="/media/storage2/software/anaconda3/envs/"
 params.ref_data = "/media/storage2/software/refdata-gex-GRCh38-2020-A"
-params.cellranger_path = "/media/storage2/software/cellranger-6.0.2/cellranger"
-params.User = "$USER"
 // Optional Params
 
 // Channels definition
@@ -16,7 +13,7 @@ out_dir = file(params.outdir)
 out_dir.mkdir()
 params.Sample_metadata = ""
 params.Mouse = false
-process Cellranger { // 6.0.2
+process Cellranger {
     publishDir "${params.outdir}/1-Counts", mode:'copy'  
     cpus 60
     maxForks 1
@@ -35,7 +32,6 @@ process Cellranger { // 6.0.2
     """
 }
 process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 10X, ya que el script de soupX esta simplificado y data de otro origen necesita la creacion de clusters 
-    //conda "${params.conda_envs_dir}LatinCells"
     publishDir "${params.outdir}/2-SoupX_SCDblFinder", mode:'copy'
     cpus 30
     maxForks 4
@@ -89,109 +85,7 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
     write10xCounts(x = datalist@assays\$RNA@counts, path = fnames)
     """
 }
-process Scanpy {
-    publishDir "${params.outdir}/Scanpy", mode:'copy'
-    cpus 30
-    maxForks 2
-    conda "${params.conda_envs_dir}Scanpy"
-    // conda create -n Scanpy -y
-    // conda activate Scanpy
-    // conda install -c conda-forge scanpy=1.8.1 -y
-    // conda install -c bioconda scrublet=0.2.3 -y
-    // conda install -c bioconda harmonypy=0.0.5 -y
-    tag "Scanpy on $sample_id"
-    
-    input:
-    tuple val(sample_id), path(reads)
-
-    output:      
-    path("figures/*.png")
-
-    script:
-    """
-    #!/usr/bin/env python3
-    from itertools import groupby
-    from pickle import TRUE
-    import scanpy as sc
-    import numpy as np
-    import pandas as pd
-    import os
-    import scrublet as scr
-    import matplotlib.pyplot as plt
-    from scipy import stats
-    import scanpy.external as sce
-    import harmonypy
-    import seaborn as sns
-
-    results_file = 'write/strainedCounts_${sample_id}.h5ad'  
-    data_soup = sc.read_10x_mtx('$reads', var_names=('gene_symbols')) 
-    data_soup.var['mt'] = data_soup.var_names.str.startswith('mt-') # mitochondrial genes
-    data_soup.var['ribo'] = data_soup.var_names.str.startswith(("Rps","Rpl")) # ribosomal genes
-    data_soup.var['hb'] = data_soup.var_names.str.contains(("^Hb[^(P)]")) # hemoglobin genes.
-    sc.pp.calculate_qc_metrics(data_soup, qc_vars=['mt','ribo','hb'], percent_top=None, log1p=False, inplace=True)
-
-    lower_nmads_ribo=data_soup.obs.pct_counts_ribo.median() - (3 * stats.median_abs_deviation(data_soup.obs.pct_counts_ribo))
-    upper_nmads_ribo=data_soup.obs.pct_counts_ribo.median() + (3 * stats.median_abs_deviation(data_soup.obs.pct_counts_ribo))
-    lower_nmads_mt=data_soup.obs.pct_counts_mt.median() - (3 * stats.median_abs_deviation(data_soup.obs.pct_counts_mt))
-    upper_nmads_mt=data_soup.obs.pct_counts_mt.median() + (3 * stats.median_abs_deviation(data_soup.obs.pct_counts_mt))
-    lower_nmads_n_genes_by_counts=data_soup.obs.n_genes_by_counts.median() - (3 * stats.median_abs_deviation(data_soup.obs.n_genes_by_counts)) #“n_genes_by_counts”. The number of genes with at least 1 count in a cell. Calculated for all cells.
-    upper_nmads_n_genes_by_counts=data_soup.obs.n_genes_by_counts.median() + (3 * stats.median_abs_deviation(data_soup.obs.n_genes_by_counts))
-    lower_nmads_total_counts=data_soup.obs.total_counts.median() -(3 * stats.median_abs_deviation(data_soup.obs.total_counts))
-    upper_nmads_total_counts=data_soup.obs.total_counts.median() +(3 * stats.median_abs_deviation(data_soup.obs.total_counts))
-    filtered_data_soup = data_soup.obs.loc[(data_soup.obs.n_genes_by_counts > lower_nmads_n_genes_by_counts) & (data_soup.obs.n_genes_by_counts <  upper_nmads_n_genes_by_counts) & (data_soup.obs.pct_counts_mt < upper_nmads_mt) & (data_soup.obs.pct_counts_ribo< upper_nmads_ribo) & (data_soup.obs.total_counts > lower_nmads_total_counts)]    
-    data_soup2 = data_soup[filtered_data_soup.index, :]
-    sc.pl.violin(data_soup2, ['n_genes_by_counts'], jitter=0.4, multi_panel=True,save='_${sample_id}_soup.png') # Imagenes/WTs
-
-    ## correr scrublet aqui, antes de concatenar, añadir al loop anterior? # se espera un 0.05
-    #Predict doublets 
-    # pip3 install scrublet --user 
-    scrub = scr.Scrublet(data_soup2.X,expected_doublet_rate=0.06) # se trabaja con la matriz raw, no normalizada, trabajar en cada muestra por separado
-    data_soup2.obs['doublet_scores'], data_soup2.obs['predicted_doublets'] = scrub.scrub_doublets()
-    scrub.call_doublets(threshold=0.25)
-    histo_doblet=scrub.plot_histogram()
-    histo_doblet[0].savefig("figures/doublet_${sample_id}_soupscrub.png")  
-    sum(data_soup2.obs['predicted_doublets'])
-    # add in column with singlet/doublet instead of True/False
-    data_soup2.obs['doublet_info'] = data_soup2.obs["predicted_doublets"].astype(str)
-    sc.pl.violin(data_soup2, 'n_genes_by_counts',jitter=0.4, groupby = 'doublet_info', rotation=45,save='_${sample_id}_doublet.png')  
-    #Now, lets run PCA and UMAP and plot doublet scores onto umap to check the doublet predictions
-        
-    data_soup3= data_soup2.copy()    
-    sc.pp.log1p(data_soup3) #Logarithmize the data 
-    sc.pp.highly_variable_genes(data_soup3, min_mean=0.0125, max_mean=3, min_disp=0.5)
-    data_soup3 = data_soup3[:, data_soup3.var.highly_variable]
-    sc.pp.regress_out(data_soup3, ['total_counts', 'pct_counts_mt'])
-    sc.pp.scale(data_soup3, max_value=10)
-    sc.tl.pca(data_soup3, svd_solver='arpack')
-    sc.pp.neighbors(data_soup3, n_neighbors=10, n_pcs=40)
-    sc.tl.umap(data_soup3)
-    sc.pl.umap(data_soup3, color=['doublet_scores','doublet_info'],save='_${sample_id}_doublet2.png')
-    """
-}
-process Monocle {
-    cpus 30
-    maxForks 2
-    conda "${params.conda_envs_dir}Monocle"
-    // conda create -n Monocle -y
-    // conda activate Monocle
-    // conda install -c bioconda r-monocle3=1.0.0 -y
-    tag "Monocle on $sample_id"
-    
-    input:
-    path(sample_id)
-
-    output:    
-    //path "*.html"
-    //path "*zip", emit: multiqc_input    
-    path "strainedCounts_*", emit: consensus_fasta  
-
-    script:
-    """
-    Rscript --vanilla /media/storage/Adolfo/singleCell/SoupX.nf.R $sample_id
-    """
-}
 process Seurat_Object_creation {
-    //conda "${params.conda_envs_dir}LatinCells"
     publishDir "${params.outdir}/3-Seurat-Object", mode:'copy'
 
     input:
@@ -228,7 +122,6 @@ process Seurat_Object_creation {
     """
 }
 process Seurat_QC_integration {
-    //conda "${params.conda_envs_dir}SingleCell"
     publishDir "${params.outdir}/4-Seurat_QC-Integration", mode:'copy'
     
     input:
@@ -322,7 +215,6 @@ process Seurat_QC_integration {
     """
 }
 process Seurat_Cell_Annotation {
-    //conda "${params.conda_envs_dir}SingleCell"
     publishDir "${params.outdir}/5-Seurat-Cell_Annotation", mode:'copy'
     
     input:
@@ -355,7 +247,7 @@ process Seurat_Cell_Annotation {
     ref4 <- celldex::MonacoImmuneData()
     shared <- Reduce(intersect, list(rownames(ref1), rownames(ref2), rownames(ref3), rownames(ref4)))
     ref1 <- ref1[shared,]; ref2 <- ref2[shared,]; ref3 <- ref3[shared,]; ref4 <- ref4[shared,]
-    save(ref1, ref2, ref3, ref4, cl, file = 'SingleR_refs.RData')
+    #save(ref1, ref2, ref3, ref4, cl, file = 'SingleR_refs.RData')
     #load("Data/SingleR_refs.RData")
     set.seed(123)
     colors <- c("#E31A1C","#1F78B4","#33A02C","#FF7F00","#6A3D9A","#B15928","#A6CEE3","#bd18ea","cyan","#B2DF8A","#FB9A99","deeppink4","#00B3FFFF","#CAB2D6","#FFFF99","#05188a","#CCFF00FF","cornflowerblue","#f4cc03","black","blueviolet","#4d0776","maroon3","blue","#E5D8BD","cadetblue4","#e5a25a","lightblue1","#F781BF","#FC8D62","#8DA0CB","#E78AC3","green3","#E7298A","burlywood3","#A6D854","firebrick","#FFFFCC","mediumpurple","#1B9E77","#FFD92F","deepskyblue4","yellow3","#00FFB2FF","#FDBF6F","#FDCDAC","gold3","#F4CAE4","#E6F5C9","#FF00E6FF","#7570B3","goldenrod","#85848f","lightpink3","olivedrab","cadetblue3")
@@ -406,20 +298,19 @@ process Seurat_Cell_Annotation {
     ggsave("clustree_singleR.png", width = 16,height = 9)
     ###################################################################################################################################################
     DimPlot(datalist,reduction = "umap", group.by = "SingleR_res.1.4", cols = colors,raster=FALSE) + seurat_theme()
-    ggsave(paste0("SingleR_res.1.4.png"),heigh=9,width=16)
+    ggsave(paste0("SingleR_res.1.4.png"),heigh=9,width=9)
     DimPlot(datalist,reduction = "umap", group.by = "SingleR_res.0.8", cols = colors,raster=FALSE) + seurat_theme()
-    ggsave(paste0("SingleR_res.0.8.png"),heigh=9,width=16)
+    ggsave(paste0("SingleR_res.0.8.png"),heigh=9,width=9)
     ###################################################################################################################################################
     clustree(datalist,prefix="Seurat_clusters_res.",node_text_angle = 15)
     ggsave("clustree_Seurat_clusters.png", width = 16,height = 9)
     DimPlot(datalist,reduction = "umap", group.by = "Seurat_clusters_res.1.4", cols = colors,raster=FALSE) + seurat_theme()
-    ggsave("Seurat_clusters_res.1.4.png",heigh=9,width=16)
+    ggsave("Seurat_clusters_res.1.4.png",heigh=9,width=9)
     ###################################################################################################################################################
     saveRDS(datalist, file = "datalist.Cell_Annotation.rds")
     """
 }
 process Seurat_create_object_mouse {
-    //conda "${params.conda_envs_dir}SingleCell"
     publishDir "${params.outdir}/Seurat", mode:'copy'
     
     input:
@@ -577,9 +468,7 @@ workflow {
     Seurat_QC_integration(Seurat_Object_creation.out.rds)    
     Seurat_Cell_Annotation(Seurat_QC_integration.out.rds)
     }
-    //Scanpy(SoupX.out.clean_reads)
 }
 workflow prueba {    
-    print(params.User)
 }
 //nextflow /media/storage2/Adolfo2/LatinCells/LatinCells/main.nf '--dataDir=/media/storage2/Adolfo2/LatinCells/workflow_test/RawData_test/*' -resume
