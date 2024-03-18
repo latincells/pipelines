@@ -83,7 +83,7 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
     library(dplyr) ###
 
     removeDoublets <- function(doubletFile, sobj) {
-    to.remove <- read.table(doubletFile, sep = '\t', header = T) %>% 
+    to.remove <- read.table(doubletFile, sep = '\\t', header = T) %>% 
         dplyr::filter(class == 'doublet') %>% 
         rownames()
     sobj <- subset(sobj, cells = setdiff(colnames(sobj), to.remove))
@@ -97,15 +97,14 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
     data <- RenameCells(data, add.cell.id = fnames)
     sce <- as.SingleCellExperiment(data)
     set.seed(123)
-    results <- scDblFinder(sce, returnType = 'table') %>% 
-        as.data.frame() %>% 
-        filter(type == 'real')  
-    write.table(results, file.path(paste0(fnames, '.txt')), sep = '\t', quote = F, col.names = T, row.names = T)
+    results <- scDblFinder(sce, returnType = 'table') %>% as.data.frame() %>% filter(type == 'real')  
+    write.table(results, file.path(paste0(fnames, '.txt')), sep = '\\t', quote = F, col.names = T, row.names = T)
 
     datalist <- CreateSeuratObject(counts = Read10X(fnames2), project = fnames, min.cells = 3, min.features = 200)
     datalist <- RenameCells(datalist, add.cell.id = fnames)    
     datalist <- removeDoublets(file.path(paste0(fnames, '.txt')), datalist)
-    write10xCounts(x = datalist@assays\$RNA@counts, path = fnames)
+    sce2 <- as.SingleCellExperiment(datalist)
+    DropletUtils:::write10xCounts(x = sce2@assays@data\$counts, path = fnames)
     """
 }
 process Seurat_Object_creation {
@@ -188,21 +187,15 @@ process Seurat_QC_integration {
 
     system("mkdir -p Analysis/")
     system("mkdir -p Analysis/Images/")
-    system("mkdir -p Analysis/DEGs/")
     system("mkdir -p Analysis/Images/QC/")
-    system("mkdir -p Analysis/Images/Pre-Harmony/")
-    system("mkdir -p Analysis/Images/ImmuneData/")
-    system("mkdir -p Analysis/Images/Harmony_integration/")
-    system("mkdir -p Analysis/Images/Clustering/")
-    system("mkdir -p Analysis/Images/DEGs/")
-    system("mkdir -p Analysis/Images/Pedidos/")
-    datalist <- readRDS("${Datalist}")
-    #mt <- PercentageFeatureSet(datalist, pattern = "^MT-")
+    system("mkdir -p Analysis/Images/PreIntegration/")
+    system("mkdir -p Analysis/Images/PosIntegration/")
+    datalist <- readRDS("${Datalist}") %>% JoinLayers()
     datalist[["percent.mt"]] <- PercentageFeatureSet(datalist, pattern="^MT-")
     VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=4,group.by = "${params.Batch}")
     ggsave(paste0("Analysis/Images/QC/Pre-QC.byBatch.png"), width = 16, height = 9)
     pre_QC_cells <- dim(datalist)[2]
-    datalist <- datalist %>% subset(subset = nFeature_RNA > 200 & percent.mt < 10) %>% AddModuleScore(features = list(hk), name = "housekeeping") %>% AddModuleScore(features = list(ribo), name = "ribo.percent")
+    datalist <- datalist %>% subset(subset = nFeature_RNA > 200 & nFeature_RNA <= 6000 & percent.mt < 10)
     Post_QC_cells <- dim(datalist)[2]
     VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=4,group.by = "${params.Batch}")
     ggsave(paste0("Analysis/Images/QC/QC.byBatch.png"), width = 16, height = 9)
@@ -211,16 +204,16 @@ process Seurat_QC_integration {
     datalist.qc %>% ggplot() + geom_histogram(aes(x=log10(nCount_RNA)),bins=100)
     FeatureScatter(datalist, feature1="nCount_RNA", feature2="nFeature_RNA")
     ###################################################################################################################################################
-    datalist <- NormalizeData(datalist, verbose = F)
+    datalist <- NormalizeData(datalist, verbose = F) %>% AddModuleScore(features = list(hk), name = "housekeeping") %>% AddModuleScore(features = list(ribo), name = "ribo.percent")
     datalist <- FindVariableFeatures(datalist, selection.method = "vst", nfeatures = 2000, verbose = F)
     VariableFeatures(datalist) <- VariableFeatures(datalist)[!grepl("^MT-|^RPL|^RPS|MALAT1",VariableFeatures(datalist))]
     VariableFeatures(datalist) <- head(VariableFeatures(datalist),2000)
     LabelPoints(plot=VariableFeaturePlot(datalist), points = head(VariableFeatures(datalist), 15), repel=T, xnudge=0, ynudge=0) + theme(legend.position="none") + seurat_theme()
     ggsave(paste0("Analysis/Images/QC/VariableFeatures.png"), width = 9, height = 9)
     all.genes <- rownames(datalist)
-    #datalist <- ScaleData(datalist, verbose = F,features = all.genes) #
+    datalist <- ScaleData(datalist, verbose = F,features = all.genes) #
     datalist <- CellCycleScoring(datalist,s.features = cc.genes\$s.genes, g2m.features = cc.genes\$g2m.genes, set.ident = TRUE, search = TRUE)
-    datalist <- ScaleData(datalist,vars.to.regress = c('S.Score', 'G2M.Score'), features = all.genes) #, 'housekeeping1', 'ribo.percent1'
+    datalist <- ScaleData(datalist,vars.to.regress = c('nFeature_RNA', 'nCount_RNA', 'percent.mt', 'housekeeping1', 'ribo.percent1', 'S.Score', 'G2M.Score')) #, 'housekeeping1', 'ribo.percent1'
     datalist <- RunPCA(datalist, verbose = F)
 
     print(datalist[["pca"]], dims = 1:5, nfeatures = 5)
@@ -234,41 +227,42 @@ process Seurat_QC_integration {
     datalist <- RunUMAP(datalist, reduction = "pca", dims = 1:Best_PC, verbose = F, min.dist = 0.3)
     ###################################################################################################################################################
     DimPlot(datalist,reduction = "umap", group.by = "orig.ident", cols = colors) + seurat_theme()
-    ggsave(paste0("Analysis/Images/Pre-Harmony/Sample.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/PreIntegration/orig.ident.png"), width = 9, height = 9)
     DimPlot(datalist,reduction = "umap", group.by = "${params.Batch}", cols = colors) + seurat_theme()
-    ggsave(paste0("Analysis/Images/Pre-Harmony/Batch.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/PreIntegration/Batch.png"), width = 9, height = 9)
     DimPlot(datalist, group.by = 'Phase', reduction = 'umap')
-    ggsave("Analysis/Images/Pre-Harmony/Phase.png", width = 9, height = 9)
+    ggsave("Analysis/Images/PreIntegration/Phase.png", width = 9, height = 9)
     datalist %>% FeaturePlot(reduction = "umap",features="nCount_RNA")
-    ggsave(paste0("Analysis/Images/Pre-Harmony/nCount_RNA.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/PreIntegration/nCount_RNA.png"), width = 9, height = 9)
     datalist %>% FeaturePlot(reduction = "umap",features="ribo.percent1")
-    ggsave(paste0("Analysis/Images/Pre-Harmony/ribo.percent1.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/PreIntegration/ribo.percent1.png"), width = 9, height = 9)
     datalist %>% FeaturePlot(reduction = "umap",features="percent.mt")
-    ggsave(paste0("Analysis/Images/Pre-Harmony/percent.mt.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/PreIntegration/percent.mt.png"), width = 9, height = 9)
 
     ###################################################################################################################################################
-    datalist2 <- datalist %>% RunHarmony("${params.Batch}", plot_convergence = T,max.iter.harmony = 50)
+    datalist2 <- datalist %>% RunHarmony("${params.Batch}", plot_convergence = T, max_iter = 50)
     Best_PC_harmony <- optimizePCA(datalist2@reductions\$harmony,0.8)
     ElbowPlot(datalist2, ndims = length(datalist2@reductions\$harmony), reduction = "harmony") + geom_vline(xintercept=Best_PC_harmony, linetype = "dashed", color = "red")
     ggsave(paste0("Analysis/Images/QC/ElbowPlot_Harmony.png"), width = 9, height = 9, bg="white")
     datalist2 <- datalist2 %>% 
     RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, min.dist = 0.3) %>% 
     FindNeighbors(reduction = "harmony", k.param = 10, dims = 1:Best_PC) %>% 
-    FindClusters(resolution = seq(0.1,0.8,0.1)) %>% 
+    FindClusters(resolution = seq(0.2,2.6,0.2)) %>% 
     identity()
+    colnames(datalist2@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist2@meta.data))
     ###################################################################################################################################################
     DimPlot(datalist2,reduction = "umap", group.by = "orig.ident", cols = colors) + seurat_theme()
-    ggsave(paste0("Analysis/Images/Harmony_integration/Sample.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/PosIntegration/orig.ident.png"), width = 9, height = 9)
     DimPlot(datalist2,reduction = "umap", group.by = "${params.Batch}", cols = colors) + seurat_theme()
-    ggsave(paste0("Analysis/Images/Harmony_integration/Batch.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/PosIntegration/Batch.png"), width = 9, height = 9)
     FeaturePlot(datalist2,reduction = "umap",features="nCount_RNA")
-    ggsave(paste0("Analysis/Images/Harmony_integration/nCount_RNA.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/PosIntegration/nCount_RNA.png"), width = 9, height = 9)
     FeaturePlot(datalist2, reduction = "umap",features="ribo.percent1")
-    ggsave(paste0("Analysis/Images/Harmony_integration/ribo.percent1.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/PosIntegration/ribo.percent1.png"), width = 9, height = 9)
     DimPlot(datalist2, group.by = 'Phase', reduction = 'umap')
-    ggsave("Analysis/Images/Harmony_integration/Phase.png", width = 9, height = 9)
+    ggsave("Analysis/Images/PosIntegration/Phase.png", width = 9, height = 9)
     datalist2 %>% FeaturePlot(reduction = "umap",features="percent.mt")
-    ggsave(paste0("Analysis/Images/Harmony_integration/percent.mt.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/PosIntegration/percent.mt.png"), width = 9, height = 9)
     saveRDS(datalist2, 'datalist.postQC-int.rds')
     """
 }
@@ -359,6 +353,10 @@ process Seurat_Cell_Annotation {
     ggsave(paste0("SingleR_res.1.4.png"),heigh=9,width=9)
     DimPlot(datalist,reduction = "umap", group.by = "SingleR_res.0.8", cols = colors,raster=FALSE) + seurat_theme()
     ggsave(paste0("SingleR_res.0.8.png"),heigh=9,width=9)
+    DimPlot(datalist,reduction = "umap", group.by = "SingleR_res.2", cols = colors,raster=FALSE) + seurat_theme()
+    ggsave(paste0("SingleR_res.2.png"),heigh=9,width=9)
+    DimPlot(datalist,reduction = "umap", group.by = "SingleR_res.2.6", cols = colors,raster=FALSE) + seurat_theme()
+    ggsave(paste0("SingleR_res.2.6.png"),heigh=9,width=9)
     ###################################################################################################################################################
     clustree(datalist,prefix="Seurat_clusters_res.",node_text_angle = 15)
     ggsave("clustree_Seurat_clusters.png", width = 16,height = 9)
@@ -410,7 +408,7 @@ process Seurat_create_object_mouse {
     }
 
     removeDoublets <- function(doubletFile, sobj) {
-    to.remove <- read.table(doubletFile, sep = '\t', header = T) %>% 
+    to.remove <- read.table(doubletFile, sep = '\\t', header = T) %>% 
         dplyr::filter(class == 'doublet') %>% 
         rownames()
     sobj <- subset(sobj, cells = setdiff(colnames(sobj), to.remove))
@@ -483,7 +481,7 @@ process Seurat_create_object_mouse {
     results <- scDblFinder(sce, returnType = 'table') %>% 
         as.data.frame() %>% 
         filter(type == 'real')  
-    write.table(results, file.path(paste0(fnames[i], '.txt')), sep = '\t', quote = F, col.names = T, row.names = T)
+    write.table(results, file.path(paste0(fnames[i], '.txt')), sep = '\\t', quote = F, col.names = T, row.names = T)
     }
 
     fnames <- basename(list.dirs('./', recursive = F))

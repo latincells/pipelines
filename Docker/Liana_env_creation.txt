@@ -1,11 +1,26 @@
-micromamba create -n LatinCells -y
-micromamba activate LatinCells
+micromamba create -n Liana -y
+micromamba activate Liana
 micromamba config append channels conda-forge
+
 micromamba install -c conda-forge r-seurat -y # 5.0.1
+#micromamba install conda-forge::r-r.utils -y # 2.12.3
+
+install.packages("R.utils")
+install.packages("remotes")
+remotes::install_github('satijalab/seurat-wrappers', upgrade=F))
+remotes::install_github('saezlab/liana', upgrade=F)
+devtools::install_github("immunogenomics/harmony",upgrade ="never")
+
+
+R -e 'install.packages("devtools", type = "source", repos="https://cran.dcc.uchile.cl")'
+remotes::install_github('satijalab/seurat-wrappers')
+
+
+
 micromamba install -c bioconda bioconductor-scdblfinder -y # 1.16.0
 micromamba install -c conda-forge r-soupx -y  # 1.6.2 
 micromamba install -c bioconda bioconductor-dropletutils -y # 1.22.0
-micromamba install -c bioconda bioconductor-preprocesscore=1.62.1 -y # 1.64.0
+micromamba install -c bioconda bioconductor-preprocesscore -y # 1.64.0
 #conda install -c bioconda r-harmony
 micromamba install -c conda-forge r-clustree -y # 0.5.1
 micromamba install -c bioconda bioconductor-singler -y # 2.4.0

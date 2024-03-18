@@ -13,6 +13,13 @@ RUN micromamba install -y -n SingleCell -f /tmp/LatinCells.yml && \
     micromamba clean --all --yes
 
 ENV PATH /opt/conda/envs/SingleCell/bin:$PATH
+RUN R -e 'install.packages("Matrix", type = "source", repos="https://cran.dcc.uchile.cl")'
+RUN R -e 'install.packages("irlba", type = "source", repos="https://cran.dcc.uchile.cl")'
+RUN R -e 'install.packages("devtools", type = "source", repos="https://cran.dcc.uchile.cl")'
+RUN R -e 'remotes::install_github("satijalab/seurat-wrappers", upgrade=F)'
+RUN R -e 'remotes::install_github("saezlab/liana", upgrade=F)'
+RUN R -e 'devtools::install_github("immunogenomics/harmony",upgrade ="never")'
+#RUN R -e 'BiocManager::install("clusterExperiment",update = FALSE)'
 RUN rm /tmp/LatinCells.yml
 USER root
 RUN apt-get update && apt-get install -y procps && rm -rf /var/lib/apt/lists/*
