@@ -1,5 +1,7 @@
 micromamba create -n LatinCells -y
 micromamba activate LatinCells
+micromamba config append channels bioconda
+micromamba config append channels dnachun
 micromamba config append channels conda-forge
 micromamba install -c conda-forge r-seurat -y # 5.0.1
 micromamba install -c bioconda bioconductor-scdblfinder -y # 1.16.0
@@ -19,4 +21,10 @@ micromamba install bioconda::bioconductor-deseq2 -y # 1.42.0
 micromamba install conda-forge::r-circlize -y # 0.4.16
 micromamba install conda-forge::r-tidyverse -y # 2.0.0
 micromamba install bioconda::bioconductor-clusterexperiment -y # 2.22.0
+micromamba install bioconda::bioconductor-fgsea -y # 1.28.0
+micromamba install bioconda::bioconductor-mast -y # 1.28.0
+micromamba install bioconda::r-monocle3 -y # 1.3.1
+micromamba install conda-forge::r-devtools -y # 2.4.5
+micromamba install bioconda::bioconductor-clusterprofiler -y # 4.10.0
+micromamba install conda-forge::r-ggh4x -y # 0.2.8
 #micromamba env export > LatinCells.last.yml

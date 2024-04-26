@@ -16,7 +16,7 @@ out_dir.mkdir()
 params.Sample_metadata = ""
 params.Mouse = false
 process Cellranger {
-    publishDir "${params.outdir}/1-Counts", mode:'copy'  
+    storeDir "${params.outdir}/1-Counts" 
     cpus 60
     maxForks 1
     tag "Cellranger on $sample_id"
@@ -30,7 +30,7 @@ process Cellranger {
 
     script:
     """
-    cellranger count --id=Mapped_$sample_id --fastqs=$reads --sample=$sample_id --transcriptome=$ref_data --localcores $task.cpus
+    cellranger count --id=Mapped_$sample_id --fastqs=$reads --sample=$sample_id --transcriptome=$ref_data --localcores $task.cpus --localmem 90
     """
 }
 process Freemuxlet {
@@ -76,7 +76,7 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
     png("soup_${sample_id}.png",width=480, height=480)
     sc = autoEstCont(sc)
     dev.off()
-    out = adjustCounts(sc)
+    out = adjustCounts(sc, roundToInt = TRUE)
     DropletUtils:::write10xCounts("./${sample_id}_clean",out)
     library(Seurat)
     library(scDblFinder)
@@ -526,6 +526,18 @@ workflow {
     Seurat_Object_creation(SoupX_scDblFinder.out.clean_reads.collect())   
     Seurat_QC_integration(Seurat_Object_creation.out.rds)    
     Seurat_Cell_Annotation(Seurat_QC_integration.out.rds)
+    }
+}
+workflow NoIntegration {    
+    Cellranger(dataDir_ch,ref_data_ch)
+    if (params.NPlex != ""){
+        Freemuxlet(Cellranger.out)  
+    }
+    SoupX_scDblFinder(Cellranger.out)
+    if (params.Mouse != false){ 
+    Seurat_create_object_mouse(SoupX_scDblFinder.out.clean_reads.collect())
+    } else {
+    Seurat_Object_creation(SoupX_scDblFinder.out.clean_reads.collect())   
     }
 }
 workflow Maping { 
