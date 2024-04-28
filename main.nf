@@ -156,13 +156,17 @@ process Seurat_QC_integration {
     script:
     """
     #!/usr/bin/env Rscript
+    suppressPackageStartupMessages({
     library(Seurat) ###
     library(preprocessCore)
     library(dplyr) ###
     library(ggplot2) 
     library(harmony)
-    #colors <- clusterExperiment::bigPalette
-    colors <- c("#E31A1C","#1F78B4","#33A02C","#FF7F00","#6A3D9A","#B15928","#A6CEE3","#bd18ea","cyan","#B2DF8A","#FB9A99","deeppink4","#00B3FFFF","#CAB2D6","#FFFF99","#05188a","#CCFF00FF","cornflowerblue","#f4cc03","black","blueviolet","#4d0776","maroon3","blue","#E5D8BD","cadetblue4","#e5a25a","lightblue1","#F781BF","#FC8D62","#8DA0CB","#E78AC3","green3","#E7298A","burlywood3","#A6D854","firebrick","#FFFFCC","mediumpurple","#1B9E77","#FFD92F","deepskyblue4","yellow3","#00FFB2FF","#FDBF6F","#FDCDAC","gold3","#F4CAE4","#E6F5C9","#FF00E6FF","#7570B3","goldenrod","#85848f","lightpink3","olivedrab","cadetblue3")
+    })
+    colors <- clusterExperiment::bigPalette
+    assignInNamespace("is_conda_python", function(x){ return(FALSE) }, ns="reticulate")
+    reticulate::use_python("/opt/conda/envs/SingleCell/bin/python3")
+    set.seed(123)
     hk <- c("C1orf43", "CHMP2A", "EMC7", "GPI", "PSMB2", "PSMB4", "RAB7A", "REEP5", "SNRPD3", "VCP", "VPS29")
     ribo <- c('RPLP0', 'RPLP1', 'RPLP2', 'RPL3', 'RPL3L', 'RPL4', 'RPL5', 'RPL6', 'RPL7', 'RPL7A', 'RPL7L1', 'RPL8', 'RPL9', 'RPL10', 'RPL10A', 'RPL11', 'RPL12', 'RPL13', 'RPL13A', 'RPL14', 'RPL15', 'RPL17', 'RPL18', 'RPL18A', 'RPL19', 'RPL21', 'RPL22', 'RPL22L1', 'RPL23', 'RPL23A', 'RPL24', 'RPL26', 'RPL26L1', 'RPL27', 'RPL27A', 'RPL28', 'RPL29', 'RPL30', 'RPL31', 'RPL32', 'RPL34', 'RPL35', 'RPL35A', 'RPL36', 'RPL36A', 'RPL36AL', 'RPL37', 'RPL37A', 'RPL38', 'RPL39', 'RPL39L', 'RPL41', 'RPSA', 'RPS2', 'RPS3', 'RPS3A', 'RPS4X', 'RPS4Y1', 'RPS5', 'RPS6', 'RPS7', 'RPS8', 'RPS9', 'RPS10', 'RPS11', 'RPS12', 'RPS13', 'RPS14', 'RPS15', 'RPS15A', 'RPS16', 'RPS17', 'RPS18', 'RPS19', 'RPS20', 'RPS21', 'RPS23', 'RPS24', 'RPS25', 'RPS26', 'RPS27', 'RPS27A', 'RPS28', 'RPS29')
     optimizePCA <- function(sobj, csum){
@@ -192,39 +196,39 @@ process Seurat_QC_integration {
     system("mkdir -p Analysis/Images/PosIntegration/")
     datalist <- readRDS("${Datalist}") %>% JoinLayers()
     datalist[["percent.mt"]] <- PercentageFeatureSet(datalist, pattern="^MT-")
-    VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=4,group.by = "${params.Batch}")
+    VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3,group.by = "${params.Batch}")
     ggsave(paste0("Analysis/Images/QC/Pre-QC.byBatch.png"), width = 16, height = 9)
-    pre_QC_cells <- dim(datalist)[2]
+    #pre_QC_cells <- dim(datalist)[2]
     datalist <- datalist %>% subset(subset = nFeature_RNA > 200 & nFeature_RNA <= 6000 & percent.mt < 10)
-    Post_QC_cells <- dim(datalist)[2]
-    VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=4,group.by = "${params.Batch}")
-    ggsave(paste0("Analysis/Images/QC/QC.byBatch.png"), width = 16, height = 9)
-    datalist.qc <- FetchData(datalist, vars=c("nFeature_RNA","nCount_RNA","percent.mt"))
-    datalist.qc %>% ggplot() + geom_histogram(aes(x=nCount_RNA),bins=100)
-    datalist.qc %>% ggplot() + geom_histogram(aes(x=log10(nCount_RNA)),bins=100)
-    FeatureScatter(datalist, feature1="nCount_RNA", feature2="nFeature_RNA")
-    ###################################################################################################################################################
+    #Post_QC_cells <- dim(datalist)[2]
     datalist <- NormalizeData(datalist, verbose = F) %>% AddModuleScore(features = list(hk), name = "housekeeping") %>% AddModuleScore(features = list(ribo), name = "ribo.percent")
-    datalist <- FindVariableFeatures(datalist, selection.method = "vst", nfeatures = 2000, verbose = F)
-    VariableFeatures(datalist) <- VariableFeatures(datalist)[!grepl("^MT-|^RPL|^RPS|MALAT1",VariableFeatures(datalist))]
+    VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3,group.by = "${params.Batch}")
+    ggsave(paste0("Analysis/Images/QC/QC.byBatch.png"), width = 16, height = 9)
+    #datalist.qc <- FetchData(datalist, vars=c("nFeature_RNA","nCount_RNA","percent.mt"))
+    #datalist.qc %>% ggplot() + geom_histogram(aes(x=nCount_RNA),bins=100)
+    #datalist.qc %>% ggplot() + geom_histogram(aes(x=log10(nCount_RNA)),bins=100)
+    #FeatureScatter(datalist, feature1="nCount_RNA", feature2="nFeature_RNA")
+    ###################################################################################################################################################
+    datalist <- FindVariableFeatures(datalist, selection.method = "vst", nfeatures = 2500, verbose = F)
+    VariableFeatures(datalist) <- VariableFeatures(datalist)[!grepl("^HBB|^HBA|^MTRNR|^MT-|^MALAT1|^NEAT1|^RPS|^RPL",VariableFeatures(datalist))]
     VariableFeatures(datalist) <- head(VariableFeatures(datalist),2000)
     LabelPoints(plot=VariableFeaturePlot(datalist), points = head(VariableFeatures(datalist), 15), repel=T, xnudge=0, ynudge=0) + theme(legend.position="none") + seurat_theme()
     ggsave(paste0("Analysis/Images/QC/VariableFeatures.png"), width = 9, height = 9)
-    all.genes <- rownames(datalist)
-    datalist <- ScaleData(datalist, verbose = F,features = all.genes) #
+    #all.genes <- rownames(datalist)
+    datalist <- ScaleData(datalist, verbose = F) # ,features = all.genes
     datalist <- CellCycleScoring(datalist,s.features = cc.genes\$s.genes, g2m.features = cc.genes\$g2m.genes, set.ident = TRUE, search = TRUE)
-    datalist <- ScaleData(datalist,vars.to.regress = c('nFeature_RNA', 'nCount_RNA', 'percent.mt', 'housekeeping1', 'ribo.percent1', 'S.Score', 'G2M.Score')) #, 'housekeeping1', 'ribo.percent1'
+    datalist <- ScaleData(datalist,vars.to.regress = c('percent.mt', 'S.Score', 'G2M.Score')) #, 'housekeeping1', 'ribo.percent1', 'nFeature_RNA', 'nCount_RNA',
     datalist <- RunPCA(datalist, verbose = F)
 
-    print(datalist[["pca"]], dims = 1:5, nfeatures = 5)
+    #print(datalist[["pca"]], dims = 1:5, nfeatures = 5)
     datalist <- SetIdent(datalist,value = "orig.ident")
     DimPlot(datalist, reduction = "pca")
     ggsave(paste0("Analysis/Images/QC/PCA.png"), width = 9, height = 9)
-    DimHeatmap(datalist, dims = 1, cells = 500, balanced = TRUE)
+    #DimHeatmap(datalist, dims = 1, cells = 500, balanced = TRUE)
     Best_PC <- optimizePCA(datalist, 0.8) # 0.8 is % of variance explained by these PCs
     ElbowPlot(datalist, ndims = length(datalist@reductions\$pca), reduction = "pca") + geom_vline(xintercept=Best_PC, linetype = "dashed", color = "red")
     ggsave(paste0("Analysis/Images/QC/ElbowPlot.png"), width = 9, height = 9, bg="white")
-    datalist <- RunUMAP(datalist, reduction = "pca", dims = 1:Best_PC, verbose = F, min.dist = 0.3)
+    datalist <- RunUMAP(datalist, reduction = "pca", dims = 1:Best_PC, verbose = F, min.dist = 0.3, umap.method = "umap-learn", metric = "correlation")
     ###################################################################################################################################################
     DimPlot(datalist,reduction = "umap", group.by = "orig.ident", cols = colors) + seurat_theme()
     ggsave(paste0("Analysis/Images/PreIntegration/orig.ident.png"), width = 9, height = 9)
@@ -245,8 +249,8 @@ process Seurat_QC_integration {
     ElbowPlot(datalist2, ndims = length(datalist2@reductions\$harmony), reduction = "harmony") + geom_vline(xintercept=Best_PC_harmony, linetype = "dashed", color = "red")
     ggsave(paste0("Analysis/Images/QC/ElbowPlot_Harmony.png"), width = 9, height = 9, bg="white")
     datalist2 <- datalist2 %>% 
-    RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, min.dist = 0.3) %>% 
-    FindNeighbors(reduction = "harmony", k.param = 10, dims = 1:Best_PC) %>% 
+    RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, min.dist = 0.3, umap.method = "umap-learn", metric = "correlation") %>% 
+    FindNeighbors(reduction = "harmony", dims = 1:Best_PC) %>% 
     FindClusters(resolution = seq(0.2,2.6,0.2)) %>% 
     identity()
     colnames(datalist2@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist2@meta.data))
@@ -280,8 +284,10 @@ process Seurat_Cell_Annotation {
     """
     #!/usr/bin/env Rscript
     options(timeout=10000000000000000000000000)
-    library(rols)
+    suppressPackageStartupMessages({
+    library(rols)})
     cl <- rols::Ontology("cl")
+    suppressPackageStartupMessages({
     library(celldex)
     library(Rtsne)
     library(Seurat)
@@ -292,6 +298,7 @@ process Seurat_Cell_Annotation {
     library(BiocParallel)
     library(ggrepel)
     library(SingleR)
+    })
     ## Run just one time
     ref1 <- celldex::BlueprintEncodeData()
     ref2 <- celldex::DatabaseImmuneCellExpressionData()
@@ -347,8 +354,10 @@ process Seurat_Cell_Annotation {
     print(cluster)
     }
     clustree(datalist,prefix="SingleR_res.",node_text_angle = 15)
-    ggsave("clustree_singleR.png", width = 16,height = 9)
+    ggsave("clustree_singleR.png", width = 21,height = 9)
     ###################################################################################################################################################
+    DimPlot(datalist,reduction = "umap", group.by = "SingleR_res.0.2", cols = colors,raster=FALSE) + seurat_theme()
+    ggsave(paste0("SingleR_res.0.2.png"),heigh=9,width=9)
     DimPlot(datalist,reduction = "umap", group.by = "SingleR_res.1.4", cols = colors,raster=FALSE) + seurat_theme()
     ggsave(paste0("SingleR_res.1.4.png"),heigh=9,width=9)
     DimPlot(datalist,reduction = "umap", group.by = "SingleR_res.0.8", cols = colors,raster=FALSE) + seurat_theme()
@@ -359,7 +368,7 @@ process Seurat_Cell_Annotation {
     ggsave(paste0("SingleR_res.2.6.png"),heigh=9,width=9)
     ###################################################################################################################################################
     clustree(datalist,prefix="Seurat_clusters_res.",node_text_angle = 15)
-    ggsave("clustree_Seurat_clusters.png", width = 16,height = 9)
+    ggsave("clustree_Seurat_clusters.png", width = 21,height = 9)
     DimPlot(datalist,reduction = "umap", group.by = "Seurat_clusters_res.1.4", cols = colors,raster=FALSE) + seurat_theme()
     ggsave("Seurat_clusters_res.1.4.png",heigh=9,width=9)
     ###################################################################################################################################################
