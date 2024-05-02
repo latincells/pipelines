@@ -1,7 +1,7 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl=2
 // Mandatory Params
-params.dataDir = "prueba/*" // Raw reads a analizar
+params.dataDir = "Prueba/*" // Raw reads a analizar
 params.ref_data = "/media/storage2/software/refdata-gex-GRCh38-2020-A"
 params.Project_Name= "General"
 params.outdir = "LatinCells_Results/${params.Project_Name}/"  // Directorio donde se guardaran archivos de interes
@@ -11,6 +11,7 @@ params.NPlex= ""
 params.Sample_metadata = ""
 params.Mouse = false
 params.FreemuxletFiles = "" 
+params.help = false
 // Channels definition
 dataDir_ch = channel.fromFilePairs(params.dataDir, type: 'dir', size: -1) 
 ref_data_ch = channel.fromPath(params.ref_data, type: 'dir') 
@@ -56,7 +57,8 @@ process Freemuxlet {
     """
 }
 process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 10X, ya que el script de soupX esta simplificado y data de otro origen necesita la creacion de clusters 
-    publishDir "${params.outdir}/2-SoupX_SCDblFinder", mode:'copy'
+    publishDir "${params.outdir}/2-SoupX_SCDblFinder", mode:'copy', pattern: "*${sample_id}*"
+    //publishDir "${params.outdir}/2-SoupX_SCDblFinder", mode:'copy', pattern: '*png'
     cpus 30
     maxForks 4
     tag "SoupX on $sample_id"
@@ -67,14 +69,17 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
     output:      
     path("$sample_id"), emit: clean_reads
     path("*png")
+    path("Empty/${sample_id}_empty.file"), emit: empty
+    path("Empty/${sample_id}_empty.file2"), emit: empty2
 
     script:
     """
     #!/usr/bin/env Rscript
     library(SoupX)
-    library(DropletUtils)   
+    library(DropletUtils)
+    set.seed(123)   
     sc = load10X("${reads}/outs/")
-    png("soup_${sample_id}.png",width=480, height=480)
+    png("soup_${sample_id}.png",width=1080, height=1080)
     sc = autoEstCont(sc)
     dev.off()
     out = adjustCounts(sc, roundToInt = TRUE)
@@ -97,7 +102,6 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
     data <- CreateSeuratObject(counts = Read10X(fnames2), min.cells = 3, min.features = 200)
     data <- RenameCells(data, add.cell.id = fnames)
     sce <- as.SingleCellExperiment(data)
-    set.seed(123)
     results <- scDblFinder(sce, returnType = 'table') %>% as.data.frame() %>% filter(type == 'real')  
     write.table(results, file.path(paste0(fnames, '.txt')), sep = '\\t', quote = F, col.names = T, row.names = T)
 
@@ -106,6 +110,9 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
     datalist <- removeDoublets(file.path(paste0(fnames, '.txt')), datalist)
     sce2 <- as.SingleCellExperiment(datalist)
     DropletUtils:::write10xCounts(x = sce2@assays@data\$counts, path = fnames)
+    system("mkdir Empty")
+    system("touch Empty/${sample_id}_empty.file")
+    system("touch Empty/${sample_id}_empty.file2")
     """
 }
 process Seurat_Object_creation {
@@ -113,23 +120,24 @@ process Seurat_Object_creation {
 
     input:
     path(reads)
-    path(opt)
+    path(demultiplexData)
+    path(metadata)
 
     output:       
     path("datalist.rds"), emit: rds 
 
     script:
-    def SampleMetaData = opt.name != 'NO_FILE' ? "$opt" : ''
     """
     #!/usr/bin/env Rscript
-    library(Seurat) ###
-    library(dplyr) ###
+    library(Seurat)
+    library(dplyr)
+    set.seed(123)   
     fnames <- basename(list.dirs('./', recursive = F))
     files <- file.path(fnames)
 
     datalist <- list()
     if ("${params.Sample_metadata}" != ""){
-        meta <- read.delim("${SampleMetaData}",sep=",")}
+        meta <- read.delim(basename("${params.Sample_metadata}"),sep="\\t")}
 
     for (i in 1:length(files)) {
         datalist[[i]] <- CreateSeuratObject(counts = Read10X(files[i]), project = fnames[i], min.cells = 3, min.features = 200)  
@@ -197,82 +205,84 @@ process Seurat_QC_integration {
 
     system("mkdir -p Analysis/")
     system("mkdir -p Analysis/Images/")
-    system("mkdir -p Analysis/Images/QC/")
-    system("mkdir -p Analysis/Images/PreIntegration/")
-    system("mkdir -p Analysis/Images/PosIntegration/")
+    system("mkdir -p Analysis/Images/1-QC/")
+    system("mkdir -p Analysis/Images/2-PreIntegration/")
+    system("mkdir -p Analysis/Images/3-PosIntegration/")
     datalist <- readRDS("${Datalist}") %>% JoinLayers()
     datalist[["percent.mt"]] <- PercentageFeatureSet(datalist, pattern="^MT-")
     VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3,group.by = "${params.Batch}")
-    ggsave(paste0("Analysis/Images/QC/Pre-QC.byBatch.png"), width = 16, height = 9)
+    ggsave(paste0("Analysis/Images/1-QC/Pre-QC.byBatch.png"), width = 16, height = 9)
     #pre_QC_cells <- dim(datalist)[2]
     datalist <- datalist %>% subset(subset = nFeature_RNA > 200 & nFeature_RNA <= 6000 & percent.mt < 10)
     #Post_QC_cells <- dim(datalist)[2]
     datalist <- NormalizeData(datalist, verbose = F) %>% AddModuleScore(features = list(hk), name = "housekeeping") %>% AddModuleScore(features = list(ribo), name = "ribo.percent")
     VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3,group.by = "${params.Batch}")
-    ggsave(paste0("Analysis/Images/QC/QC.byBatch.png"), width = 16, height = 9)
-    #datalist.qc <- FetchData(datalist, vars=c("nFeature_RNA","nCount_RNA","percent.mt"))
-    #datalist.qc %>% ggplot() + geom_histogram(aes(x=nCount_RNA),bins=100)
-    #datalist.qc %>% ggplot() + geom_histogram(aes(x=log10(nCount_RNA)),bins=100)
-    #FeatureScatter(datalist, feature1="nCount_RNA", feature2="nFeature_RNA")
+    ggsave(paste0("Analysis/Images/1-QC/QC.byBatch.png"), width = 16, height = 9)
     ###################################################################################################################################################
     datalist <- FindVariableFeatures(datalist, selection.method = "vst", nfeatures = 2500, verbose = F)
     VariableFeatures(datalist) <- VariableFeatures(datalist)[!grepl("^HBB|^HBA|^MTRNR|^MT-|^MALAT1|^NEAT1|^RPS|^RPL",VariableFeatures(datalist))]
     VariableFeatures(datalist) <- head(VariableFeatures(datalist),2000)
     LabelPoints(plot=VariableFeaturePlot(datalist), points = head(VariableFeatures(datalist), 15), repel=T, xnudge=0, ynudge=0) + theme(legend.position="none") + seurat_theme()
-    ggsave(paste0("Analysis/Images/QC/VariableFeatures.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/1-QC/VariableFeatures.png"), width = 9, height = 9)
     #all.genes <- rownames(datalist)
     datalist <- ScaleData(datalist, verbose = F) # ,features = all.genes
     datalist <- CellCycleScoring(datalist,s.features = cc.genes\$s.genes, g2m.features = cc.genes\$g2m.genes, set.ident = TRUE, search = TRUE)
     datalist <- ScaleData(datalist,vars.to.regress = c('percent.mt', 'S.Score', 'G2M.Score')) #, 'housekeeping1', 'ribo.percent1', 'nFeature_RNA', 'nCount_RNA',
     datalist <- RunPCA(datalist, verbose = F)
 
-    #print(datalist[["pca"]], dims = 1:5, nfeatures = 5)
     datalist <- SetIdent(datalist,value = "orig.ident")
     DimPlot(datalist, reduction = "pca")
-    ggsave(paste0("Analysis/Images/QC/PCA.png"), width = 9, height = 9)
-    #DimHeatmap(datalist, dims = 1, cells = 500, balanced = TRUE)
+    ggsave(paste0("Analysis/Images/1-QC/PCA.png"), width = 9, height = 9)
     Best_PC <- optimizePCA(datalist, 0.8) # 0.8 is % of variance explained by these PCs
     ElbowPlot(datalist, ndims = length(datalist@reductions\$pca), reduction = "pca") + geom_vline(xintercept=Best_PC, linetype = "dashed", color = "red")
-    ggsave(paste0("Analysis/Images/QC/ElbowPlot.png"), width = 9, height = 9, bg="white")
-    datalist <- RunUMAP(datalist, reduction = "pca", dims = 1:Best_PC, verbose = F, min.dist = 0.3, umap.method = "umap-learn", metric = "correlation")
+    ggsave(paste0("Analysis/Images/1-QC/ElbowPlot.png"), width = 9, height = 9, bg="white")
+    datalist <- RunUMAP(datalist, reduction = "pca", dims = 1:Best_PC, verbose = F, min.dist = 0.3, seed.use = 42, umap.method = "umap-learn", metric = "correlation")
     ###################################################################################################################################################
     DimPlot(datalist,reduction = "umap", group.by = "orig.ident", cols = colors) + seurat_theme()
-    ggsave(paste0("Analysis/Images/PreIntegration/orig.ident.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/2-PreIntegration/orig.ident.png"), width = 9, height = 9)
     DimPlot(datalist,reduction = "umap", group.by = "${params.Batch}", cols = colors) + seurat_theme()
-    ggsave(paste0("Analysis/Images/PreIntegration/Batch.png"), width = 9, height = 9)
-    DimPlot(datalist, group.by = 'Phase', reduction = 'umap')
-    ggsave("Analysis/Images/PreIntegration/Phase.png", width = 9, height = 9)
-    datalist %>% FeaturePlot(reduction = "umap",features="nCount_RNA")
-    ggsave(paste0("Analysis/Images/PreIntegration/nCount_RNA.png"), width = 9, height = 9)
-    datalist %>% FeaturePlot(reduction = "umap",features="ribo.percent1")
-    ggsave(paste0("Analysis/Images/PreIntegration/ribo.percent1.png"), width = 9, height = 9)
-    datalist %>% FeaturePlot(reduction = "umap",features="percent.mt")
-    ggsave(paste0("Analysis/Images/PreIntegration/percent.mt.png"), width = 9, height = 9)
-
+    ggsave(paste0("Analysis/Images/2-PreIntegration/Batch.png"), width = 9, height = 9)
+    DimPlot(datalist, group.by = 'Phase', reduction = 'umap') + seurat_theme()
+    ggsave("Analysis/Images/2-PreIntegration/Phase.png", width = 9, height = 9)
+    datalist %>% FeaturePlot(reduction = "umap",features="nCount_RNA") + seurat_theme()
+    ggsave(paste0("Analysis/Images/2-PreIntegration/nCount_RNA.png"), width = 9, height = 9)
+    datalist %>% FeaturePlot(reduction = "umap",features="ribo.percent1") + seurat_theme()
+    ggsave(paste0("Analysis/Images/2-PreIntegration/ribo.percent1.png"), width = 9, height = 9)
+    datalist %>% FeaturePlot(reduction = "umap",features="percent.mt") + seurat_theme()
+    ggsave(paste0("Analysis/Images/2-PreIntegration/percent.mt.png"), width = 9, height = 9)
+    if ("${params.FreemuxletFiles}" != ""){
+    datalist@meta.data\$BEST.GUESS <- paste0(datalist@meta.data\$orig.ident,"-",datalist@meta.data\$BEST.GUESS)
+    DimPlot(datalist, group.by = 'BEST.GUESS', reduction = 'umap') + seurat_theme()
+    ggsave(paste0("Analysis/Images/2-PreIntegration/Demultiplex.png"), width = 9, height = 9)
+    }
     ###################################################################################################################################################
     datalist2 <- datalist %>% RunHarmony("${params.Batch}", plot_convergence = T, max_iter = 50)
     Best_PC_harmony <- optimizePCA(datalist2@reductions\$harmony,0.8)
     ElbowPlot(datalist2, ndims = length(datalist2@reductions\$harmony), reduction = "harmony") + geom_vline(xintercept=Best_PC_harmony, linetype = "dashed", color = "red")
-    ggsave(paste0("Analysis/Images/QC/ElbowPlot_Harmony.png"), width = 9, height = 9, bg="white")
+    ggsave(paste0("Analysis/Images/1-QC/ElbowPlot_Harmony.png"), width = 9, height = 9, bg="white")
     datalist2 <- datalist2 %>% 
-    RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, min.dist = 0.3, umap.method = "umap-learn", metric = "correlation") %>% 
+    RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, min.dist = 0.3, seed.use = 42, umap.method = "umap-learn", metric = "correlation") %>% 
     FindNeighbors(reduction = "harmony", dims = 1:Best_PC) %>% 
     FindClusters(resolution = seq(0.2,2.6,0.2)) %>% 
     identity()
     colnames(datalist2@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist2@meta.data))
     ###################################################################################################################################################
     DimPlot(datalist2,reduction = "umap", group.by = "orig.ident", cols = colors) + seurat_theme()
-    ggsave(paste0("Analysis/Images/PosIntegration/orig.ident.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/3-PosIntegration/orig.ident.png"), width = 9, height = 9)
     DimPlot(datalist2,reduction = "umap", group.by = "${params.Batch}", cols = colors) + seurat_theme()
-    ggsave(paste0("Analysis/Images/PosIntegration/Batch.png"), width = 9, height = 9)
-    FeaturePlot(datalist2,reduction = "umap",features="nCount_RNA")
-    ggsave(paste0("Analysis/Images/PosIntegration/nCount_RNA.png"), width = 9, height = 9)
-    FeaturePlot(datalist2, reduction = "umap",features="ribo.percent1")
-    ggsave(paste0("Analysis/Images/PosIntegration/ribo.percent1.png"), width = 9, height = 9)
-    DimPlot(datalist2, group.by = 'Phase', reduction = 'umap')
-    ggsave("Analysis/Images/PosIntegration/Phase.png", width = 9, height = 9)
-    datalist2 %>% FeaturePlot(reduction = "umap",features="percent.mt")
-    ggsave(paste0("Analysis/Images/PosIntegration/percent.mt.png"), width = 9, height = 9)
+    ggsave(paste0("Analysis/Images/3-PosIntegration/Batch.png"), width = 9, height = 9)
+    FeaturePlot(datalist2,reduction = "umap",features="nCount_RNA") + seurat_theme()
+    ggsave(paste0("Analysis/Images/3-PosIntegration/nCount_RNA.png"), width = 9, height = 9)
+    FeaturePlot(datalist2, reduction = "umap",features="ribo.percent1") + seurat_theme()
+    ggsave(paste0("Analysis/Images/3-PosIntegration/ribo.percent1.png"), width = 9, height = 9)
+    DimPlot(datalist2, group.by = 'Phase', reduction = 'umap') + seurat_theme()
+    ggsave("Analysis/Images/3-PosIntegration/Phase.png", width = 9, height = 9)
+    datalist2 %>% FeaturePlot(reduction = "umap",features="percent.mt") + seurat_theme()
+    ggsave(paste0("Analysis/Images/3-PosIntegration/percent.mt.png"), width = 9, height = 9)
+    if ("${params.FreemuxletFiles}" != ""){
+    DimPlot(datalist2, group.by = 'BEST.GUESS', reduction = 'umap') + seurat_theme()
+    ggsave(paste0("Analysis/Images/3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
+    }
     saveRDS(datalist2, 'datalist.postQC-int.rds')
     """
 }
@@ -378,7 +388,83 @@ process Seurat_Cell_Annotation {
     DimPlot(datalist,reduction = "umap", group.by = "Seurat_clusters_res.1.4", cols = colors,raster=FALSE) + seurat_theme()
     ggsave("Seurat_clusters_res.1.4.png",heigh=9,width=9)
     ###################################################################################################################################################
+    Idents(datalist) <- "SingleR_res.0.8"
     saveRDS(datalist, file = "datalist.Cell_Annotation.rds")
+    """
+}
+process CellChat {
+    publishDir "${params.outdir}/6-Cell_Communication", mode:'copy'
+    memory = 80.GB
+    cpus 60
+
+    input:
+    path(Datalist)
+
+    output:    
+    path("*.pdf")
+
+    script:
+    """
+    #!/usr/bin/env Rscript
+    suppressPackageStartupMessages({
+    library(Seurat)
+    library(tidyverse)
+    library(tibble)
+    library(data.table)
+    library(circlize)
+    library(pheatmap)
+    library(reshape2)
+    library(ComplexHeatmap)
+    library(CellChat)
+    library(reticulate)})
+    set.seed(123)
+    data <- readRDS('${Datalist}')
+
+    cellChat <- createCellChat(object = data, group.by = "ident", assay = "RNA")
+    ##############################################################################################
+    #Set the ligand-receptor interaction database
+    CellChatDB <- CellChatDB.human # use CellChatDB.mouse if running on mouse data
+    showDatabaseCategory(CellChatDB)
+    # use a subset of CellChatDB for cell-cell communication analysis
+    CellChatDB.use <- subsetDB(CellChatDB, search = "Secreted Signaling", key = "annotation") # use Secreted Signaling
+    cellChat@DB <- CellChatDB.use
+    ##############################################################################################
+    cellChat <- subsetData(cellChat) # This step is necessary even if using the whole database
+    cellChat <- identifyOverExpressedGenes(cellChat)
+    cellChat <- identifyOverExpressedInteractions(cellChat)
+    cellChat <- projectData(cellChat, PPI.human)
+    cellChat <- computeCommunProb(cellChat, type = "triMean", raw.use = F) # LR pairs
+    ##############################################################################################
+    # Infer the cell-cell communication at a signaling pathway level
+    cellChat <- computeCommunProbPathway(object = cellChat) # Pathways
+    # Calculate the aggregated cell-cell communication network
+    #CellChat calculates the aggregated cell-cell communication network by counting the number of links or summarizing the communication probability. Users can also calculate the aggregated network among a subset of cell groups by setting sources.use and targets.use.
+    cellChat <- aggregateNet(cellChat)
+    ##############################################################################################
+    groupSize <- as.numeric(table(cellChat@idents))
+    pdf(paste0("InteractionNumber.pdf"))
+    netVisual_circle(cellChat@net\$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = paste0("Number of interactions"))
+    dev.off()
+    pdf(paste0("InteractionStrength.pdf"))
+    netVisual_circle(cellChat@net\$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = paste0("Interaction weights/strength"))
+    dev.off()
+
+    groupSize <- as.numeric(table(cellChat@idents))
+    mat <- cellChat@net\$weight
+    par(mfrow = c(3,4), xpd=TRUE)
+    pdf(paste0("InteractionStrength.perCellType.pdf"))
+    for (i in 1:nrow(mat)) {
+    mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+    mat2[i, ] <- mat[i, ]
+
+    netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+    }
+    dev.off()
+
+    par(mfrow=c(1,1))
+    pdf(paste0("PathWaysHeatmap.pdf"))
+    netVisual_heatmap(cellChat, color.heatmap = "Reds")
+    dev.off()
     """
 }
 process Seurat_create_object_mouse {
@@ -529,21 +615,37 @@ process Seurat_create_object_mouse {
     file.remove("datalist.h5Seurat")
     """
 }
-workflow {    
-    Cellranger(dataDir_ch,ref_data_ch)
-    if (params.NPlex != ""){
-        Freemuxlet(Cellranger.out)  
-    }
-    if (params.FreemuxletFiles != ""){
-        FreemuxletFiles_ch = channel.fromFilePairs(params.FreemuxletFiles, size: -1) 
-    }
-    SoupX_scDblFinder(Cellranger.out)
-    if (params.Mouse != false){ 
-    Seurat_create_object_mouse(SoupX_scDblFinder.out.clean_reads.collect())
-    } else {
-    Seurat_Object_creation(SoupX_scDblFinder.out.clean_reads.collect(),FreemuxletFiles_ch.map{it[1]}.collect())   
-    Seurat_QC_integration(Seurat_Object_creation.out.rds)    
-    Seurat_Cell_Annotation(Seurat_QC_integration.out.rds)
+workflow {
+    if (params.help == true){
+        print '\nBasic Usage:\n\tnextflow {Path_to_script}/main.nf --dataDir="{Path_to_Data}/RawData/*" --Project_Name="Chile_03" -c {Path_to_script}/nextflow.config --NPlex=4 -resume'
+        print 'Parameters:\n\tMandatories:\n\t\t--dataDir = Sets the input sample table file.\n\t\t--ref_data = Directory with the organism genome processed by cellranger tools.\n\t\t-c = Sets the configuration file.'
+        print '\n\tAlternatives:\n\t\t--Project_Name = Sets a custom directory for the project.\n\t\t--Sample_metadata = File with metadata of samples, must be a Tabular delimited file (TSV|TAB), and must have a column calles "Sample" matching the names of raw data folders.\n\t\t--outdir = Name of directory to save outputs. (def. "LatinCells_Results/${params.Project_Name}/")\n\t\t--NPlex = Sets the number of samples per run in multiplexed libraries.\n\t\t-resume = Continue an analysis after the last well executed part of a workflow,\n\t\t\tbefore a error or a change made in thee code of a process.[Nextflow parameter].\n\t\t--help = Prints this help message.'
+        print 'Output directory:\n\tBy default this workflow creates a directory called "LatinCells_Results/General/" in the working directory.'
+    } else{    
+        Cellranger(dataDir_ch,ref_data_ch)
+        if (params.NPlex != ""){
+            Freemuxlet(Cellranger.out)  
+        }
+        SoupX_scDblFinder(Cellranger.out)
+        if (params.FreemuxletFiles != ""){
+            FreemuxletFiles_ch = channel.fromFilePairs(params.FreemuxletFiles, size: -1) 
+        } else {
+            FreemuxletFiles_ch = SoupX_scDblFinder.out.empty.collect()
+        }
+        if (params.Sample_metadata != ""){
+            MetaDataFiles_ch = channel.fromPath(params.Sample_metadata)
+            MetaDataFiles_ch.view()
+        } else {
+            MetaDataFiles_ch = SoupX_scDblFinder.out.empty2.collect()
+        }
+        if (params.Mouse != false){ 
+        Seurat_create_object_mouse(SoupX_scDblFinder.out.clean_reads.collect())
+        } else {
+        Seurat_Object_creation(SoupX_scDblFinder.out.clean_reads.collect(),FreemuxletFiles_ch.map{it[1]}.collect(),MetaDataFiles_ch)   
+        Seurat_QC_integration(Seurat_Object_creation.out.rds)    
+        Seurat_Cell_Annotation(Seurat_QC_integration.out.rds)
+        CellChat(Seurat_Cell_Annotation.out.rds)
+        }
     }
 }
 workflow NoIntegration {    
