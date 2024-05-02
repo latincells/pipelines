@@ -8,13 +8,14 @@ params.outdir = "LatinCells_Results/${params.Project_Name}/"  // Directorio dond
 // Optional Params
 params.Batch = "orig.ident"
 params.NPlex= ""
+params.Sample_metadata = ""
+params.Mouse = false
+params.FreemuxletFiles = "" 
 // Channels definition
 dataDir_ch = channel.fromFilePairs(params.dataDir, type: 'dir', size: -1) 
 ref_data_ch = channel.fromPath(params.ref_data, type: 'dir') 
 out_dir = file(params.outdir)
 out_dir.mkdir()
-params.Sample_metadata = ""
-params.Mouse = false
 process Cellranger {
     storeDir "${params.outdir}/1-Counts" 
     cpus 60
@@ -44,7 +45,7 @@ process Freemuxlet {
     tuple val(sample_id), path(reads)
 
     output:      
-    tuple val(sample_id), path("Freemuxlet_outs/P13P31F0.clust1.samples")
+    tuple val(sample_id), path("Freemuxlet_outs/${sample_id}.clust1.samples")
 
     script:
     """
@@ -112,11 +113,13 @@ process Seurat_Object_creation {
 
     input:
     path(reads)
+    path(opt)
 
     output:       
     path("datalist.rds"), emit: rds 
 
     script:
+    def SampleMetaData = opt.name != 'NO_FILE' ? "$opt" : ''
     """
     #!/usr/bin/env Rscript
     library(Seurat) ###
@@ -125,20 +128,23 @@ process Seurat_Object_creation {
     files <- file.path(fnames)
 
     datalist <- list()
-    if ("$params.Sample_metadata" != ""){
-        meta <- read.delim("$params.Sample_metadata",sep=",")
-        for (i in 1:length(files)) {
-            datalist[[i]] <- CreateSeuratObject(counts = Read10X(files[i]), project = fnames[i], min.cells = 3, min.features = 200)  
-            for (k in colnames(meta)){
-                datalist[[i]] <- AddMetaData(datalist[[i]], metadata = meta[meta\$Sample == fnames[i],][[k]], col.name = k)
-            }
-            print(paste(i, 'out', length(files)))}
-    } else {
-        for (i in 1:length(files)) {
-            datalist[[i]] <- CreateSeuratObject(counts = Read10X(files[i]), project = fnames[i], min.cells = 3, min.features = 200) 
-            print(paste(i, 'out', length(files)))}
-    }
+    if ("${params.Sample_metadata}" != ""){
+        meta <- read.delim("${SampleMetaData}",sep=",")}
 
+    for (i in 1:length(files)) {
+        datalist[[i]] <- CreateSeuratObject(counts = Read10X(files[i]), project = fnames[i], min.cells = 3, min.features = 200)  
+        if ("${params.FreemuxletFiles}" != ""){
+        MultiPlexData <- read.delim(paste0(files[i],".clust1.samples"),sep="\\t")[c("BARCODE","NUM.SNPS","NUM.READS","DROPLET.TYPE","BEST.GUESS")]
+        MultiPlexData\$BARCODE <- paste0(files[i],"_",MultiPlexData\$BARCODE)
+        rownames(MultiPlexData) <- MultiPlexData\$BARCODE
+        MultiPlexData\$BARCODE <- NULL
+        datalist[[i]] <- AddMetaData(datalist[[i]], metadata = MultiPlexData)
+        }
+        if ("${params.Sample_metadata}" != ""){
+        for (k in colnames(meta)){
+            datalist[[i]] <- AddMetaData(datalist[[i]], metadata = meta[meta\$Sample == fnames[i],][[k]], col.name = k)
+        }}
+        print(paste(i, 'out', length(files)))}
     datalist <- Reduce(merge, datalist)
     saveRDS(datalist, 'datalist.rds')
     """
@@ -528,11 +534,14 @@ workflow {
     if (params.NPlex != ""){
         Freemuxlet(Cellranger.out)  
     }
+    if (params.FreemuxletFiles != ""){
+        FreemuxletFiles_ch = channel.fromFilePairs(params.FreemuxletFiles, size: -1) 
+    }
     SoupX_scDblFinder(Cellranger.out)
     if (params.Mouse != false){ 
     Seurat_create_object_mouse(SoupX_scDblFinder.out.clean_reads.collect())
     } else {
-    Seurat_Object_creation(SoupX_scDblFinder.out.clean_reads.collect())   
+    Seurat_Object_creation(SoupX_scDblFinder.out.clean_reads.collect(),FreemuxletFiles_ch.map{it[1]}.collect())   
     Seurat_QC_integration(Seurat_Object_creation.out.rds)    
     Seurat_Cell_Annotation(Seurat_QC_integration.out.rds)
     }
@@ -542,11 +551,14 @@ workflow NoIntegration {
     if (params.NPlex != ""){
         Freemuxlet(Cellranger.out)  
     }
+    if (params.FreemuxletFiles != ""){
+        FreemuxletFiles_ch = channel.fromFilePairs(params.FreemuxletFiles, size: -1) 
+    }
     SoupX_scDblFinder(Cellranger.out)
     if (params.Mouse != false){ 
     Seurat_create_object_mouse(SoupX_scDblFinder.out.clean_reads.collect())
     } else {
-    Seurat_Object_creation(SoupX_scDblFinder.out.clean_reads.collect())   
+    Seurat_Object_creation(SoupX_scDblFinder.out.clean_reads.collect(),FreemuxletFiles_ch.map{it[1]}.collect())   
     }
 }
 workflow Maping { 
@@ -556,5 +568,9 @@ workflow Maping {
     }
 }
 workflow prueba {    
+    if (params.FreemuxletFiles != ""){
+        FreemuxletFiles_ch = channel.fromFilePairs(params.FreemuxletFiles, size: -1) 
+        FreemuxletFiles_ch.map{ it[1] }.view()
+    }
 }
-//nextflow /media/storage2/Adolfo2/LatinCells/LatinCells/main.nf '--dataDir=/media/storage2/Adolfo2/LatinCells/workflow_test/RawData_test/*' -resume
+//nextflow /media/storage2/Adolfo2/LatinCells/LatinCells/main.nf --dataDir='/media/storage2/Adolfo2/LatinCells/workflow_test/RawData_test/*' -resume
