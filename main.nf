@@ -67,11 +67,10 @@ process Demuxlet {
     cpus 10
     memory 10.GB
     maxForks 2
-    tag "Freemuxlet on $sample_id"
+    tag "Demuxlet on $sample_id"
     
     input: 
-    tuple val(sample_id), path(reads)
-    path(vcf)
+    tuple val(sample_id), path(reads), path(vcf)
 
     output:      
     tuple val(sample_id), path("${sample_id}.best")
@@ -882,8 +881,9 @@ workflow {
             Demultiplex_ch = channel.fromFilePairs(params.FreemuxletFiles, size: -1).map{it[1]}.collect()
         } else {
             if (params.VCF_Files != ""){
-                Demuxlet(Cellranger.out,channel.fromPath(params.VCF_Files))
-                Demultiplex_ch = Demuxlet.out.map{it[1]}
+                VCFs = channel.fromFilePairs(params.VCF_Files, size: -1)
+                Demuxlet(Cellranger.out.combine(VCFs, by: 0))
+                Demultiplex_ch = Demuxlet.out.map{it[1]}.collect()
             } else {
             Demultiplex_ch = channel.of("None").combine(Cellranger.out.map{it[0]}).map{it[0]}
             }
@@ -935,9 +935,5 @@ workflow Maping {
     }
 }
 workflow prueba {    
-    if (params.FreemuxletFiles != ""){
-        Demultiplex_ch = channel.fromFilePairs(params.FreemuxletFiles, size: -1) 
-        Demultiplex_ch.map{ it[1] }.view()
-    }
 }
 //nextflow /media/storage2/Adolfo2/LatinCells/LatinCells/main.nf --dataDir='/media/storage2/Adolfo2/LatinCells/workflow_test/RawData_test/*' -resume
