@@ -46,6 +46,7 @@ process Freemuxlet {
     memory 100.GB
     maxForks 1
     tag "Freemuxlet on $sample_id"
+    errorStrategy 'ignore'
     
     input: 
     tuple val(sample_id), path(reads)
