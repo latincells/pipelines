@@ -38,9 +38,9 @@ process Cellranger {
 process Freemuxlet {
     label 'Demultiplex'
     publishDir "${params.outdir}/Metadata", mode:'copy'  
-    cpus 60
-    memory 110.GB
-    maxForks 1
+    cpus 20
+    memory 50.GB
+    maxForks 2
     tag "Freemuxlet on $sample_id"
     errorStrategy 'ignore'
     
