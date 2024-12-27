@@ -1,0 +1,7 @@
+micromamba create -n Demultiplex
+micromamba activate Demultiplex
+micromamba config append channels bioconda
+micromamba config append channels conda-forge
+micromamba install bioconda::popscle -y
+micromamba install bioconda::bedtools -y
+#micromamba env export > Demultiplex.yml

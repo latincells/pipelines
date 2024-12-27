@@ -11,15 +11,11 @@ params.Batch = "orig.ident"
 params.NPlex= ""
 params.Sample_metadata = ""
 params.Mouse = false
+params.Freemuxlet = false
 params.FreemuxletFiles = ""
 params.VCF_Files = "" 
 params.ModelsCelltypist = ""
 params.help = false
-// Channels definition
-dataDir_ch = channel.fromFilePairs(params.dataDir, type: 'dir', size: -1) 
-ref_data_ch = channel.fromPath(params.ref_data, type: 'dir') 
-out_dir = file(params.outdir)
-out_dir.mkdir()
 process Cellranger {
     storeDir "${params.outdir}/1-Counts" 
     cpus 24
@@ -43,7 +39,7 @@ process Freemuxlet {
     label 'Demultiplex'
     publishDir "${params.outdir}/Metadata", mode:'copy'  
     cpus 60
-    memory 100.GB
+    memory 110.GB
     maxForks 1
     tag "Freemuxlet on $sample_id"
     errorStrategy 'ignore'
@@ -52,14 +48,43 @@ process Freemuxlet {
     tuple val(sample_id), path(reads)
 
     output:      
-    tuple val(sample_id), path("Freemuxlet_outs/${sample_id}.clust1.samples")
+    tuple val(sample_id), path("Freemuxlet_outs/${sample_id}.Freemuxlet.samples")
 
     script:
     """
+    mkdir Pileup_files
     popscle dsc-pileup --sam ${reads}/outs/possorted_genome_bam.bam --vcf /tmp/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --out Pileup_files/${sample_id}
     mkdir Freemuxlet_outs
     popscle freemuxlet --plp Pileup_files/${sample_id} --out Freemuxlet_outs/${sample_id} --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --nsample ${params.NPlex}
     gunzip Freemuxlet_outs/${sample_id}.clust1.samples.gz
+    mv Freemuxlet_outs/${sample_id}.clust1.samples Freemuxlet_outs/${sample_id}.Freemuxlet.samples
+    """
+}
+process CombinedFremuxletDemuxlet {
+    label 'Demultiplex'
+    publishDir "${params.outdir}/Metadata", mode:'copy'  
+    cpus 60
+    memory 135.GB
+    maxForks 1
+    tag "Freemuxlet on $sample_id"
+    errorStrategy 'ignore'
+    
+    input: 
+    tuple val(sample_id), path(reads), path(vcf)
+
+    output:      
+    tuple val(sample_id), path("${sample_id}.CombinedDemultiplex.samples")
+
+    script:
+    """
+    bedtools merge -i ${vcf} | samtools view -@ 8 --write-index -L - -D CB:<(zcat ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz) -o filtered_bam.bam ${reads}/outs/possorted_genome_bam.bam
+    mkdir Pileup_files
+    popscle dsc-pileup --sam filtered_bam.bam --vcf ${vcf} --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --out Pileup_files/${sample_id}
+    popscle freemuxlet --plp Pileup_files/${sample_id} --out ${sample_id} --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --nsample ${params.NPlex}
+    gunzip ${sample_id}.clust1.samples.gz
+    popscle demuxlet --plp Pileup_files/${sample_id} --vcf ${vcf} --out ${sample_id} --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --field GT
+    (head -n 1 ${sample_id}.clust1.samples && tail -n +2 ${sample_id}.clust1.samples && tail -n +2 ${sample_id}.best) > ${sample_id}.CombinedDemultiplex.samples
+    rm filtered_bam.bam 
     """
 }
 process Demuxlet {
@@ -74,12 +99,13 @@ process Demuxlet {
     tuple val(sample_id), path(reads), path(vcf)
 
     output:      
-    tuple val(sample_id), path("${sample_id}.best")
+    tuple val(sample_id), path("${sample_id}.Demuxlet.best")
 
     script:
     """
     mkdir Demuxlet_outs
     popscle demuxlet --sam ${reads}/outs/possorted_genome_bam.bam --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --vcf ${vcf} --field GT --out ${sample_id}
+    mv ${sample_id}.best ${sample_id}.Demuxlet.best
     """
 }
 process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 10X, ya que el script de soupX esta simplificado y data de otro origen necesita la creacion de clusters 
@@ -108,7 +134,7 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
     set.seed(123)   
     sc = load10X("${reads}/outs/")
     StatsTable <- data.frame("RunID"="${sample_id}", "CellRanger" = ncol(sc\$toc))
-    png("soup_${sample_id}.png",width=1080, height=1080)
+    png("SoupX_${sample_id}.png",width=1080, height=1080)
     sc = autoEstCont(sc)
     dev.off()
     rhoEst <- sc\$fit\$rhoEst
@@ -118,6 +144,7 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
     library(Seurat)
     library(scDblFinder)
     library(dplyr) ###
+    library(ggalluvial)
 
     removeDoublets <- function(doubletFile, sobj) {
     to.remove <- read.table(doubletFile, sep = '\\t', header = T) %>% 
@@ -132,16 +159,48 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
 
     data <- CreateSeuratObject(counts = Read10X(fnames2), min.cells = 3, min.features = 200)
     StatsTable\$SeuratInitial <- ncol(data)
-    if ("${params.FreemuxletFiles}" != ""){
-        MultiPlexData <- read.delim(paste0("${sample_id}",".clust1.samples"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
+    if (file.exists(paste0("${sample_id}",".Freemuxlet.samples") | file.exists(paste0("${sample_id}",".Demuxlet.best")){
+        if (file.exists(paste0("${sample_id}",".Freemuxlet.samples")){
+            MultiPlexData <- read.delim(paste0("${sample_id}",".Freemuxlet.samples"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
+        } else {
+            MultiPlexData <- read.delim(paste0("${sample_id}",".Demuxlet.best"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]}
         rownames(MultiPlexData) <- MultiPlexData\$BARCODE
         MultiPlexData\$BARCODE <- NULL
         data <- AddMetaData(data, metadata = MultiPlexData)
         data <- subset(data, DROPLET.TYPE == "SNG")
         StatsTable\$nSNG_Plex <- ncol(data)
     }
-    if ("${params.VCF_Files}" != ""){
-        MultiPlexData <- read.delim(paste0("${sample_id}",".best"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
+    if (file.exists(paste0("${sample_id}",".CombinedDemultiplex.samples"))){
+        Combined <- read.delim(paste0("${sample_id}",".CombinedDemultiplex.samples"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
+        FreemuxletData <- Combined[!is.na(as.numeric(Combined\$SNG.BEST.GUESS)),]
+        names(FreemuxletData) <- c("BARCODE","Freemuxlet.DROPLET.TYPE","Freemuxlet.BEST.GUESS")
+        DemuxletData <- Combined[is.na(as.numeric(Combined\$SNG.BEST.GUESS)),]
+        names(DemuxletData) <- c("BARCODE","Demuxlet.DROPLET.TYPE","Demuxlet.BEST.GUESS")
+        Joined_table <- merge(DemuxletData, FreemuxletData, by="BARCODE", all=TRUE)
+        Joined_table\$DROPLET.TYPE <- paste(Joined_table\$Demuxlet.DROPLET.TYPE, Joined_table\$Freemuxlet.DROPLET.TYPE, sep = "-")
+        PlotData <- as.data.frame(table(Joined_table\$Demuxlet.BEST.GUESS,Joined_table\$Freemuxlet.BEST.GUESS,Joined_table\$DROPLET.TYPE))
+        names(PlotData) <- c("Demuxlet.BEST.GUESS","Freemuxlet.BEST.GUESS","DROPLET.TYPE","Freq")
+        PlotData <- PlotData[PlotData\$Freq > 0,]
+        Frequencies <- Joined_table %>% filter(Freemuxlet.DROPLET.TYPE == "SNG") %>% group_by(Freemuxlet.BEST.GUESS, Demuxlet.BEST.GUESS) %>% 
+                        summarise(Frequency = n(), .groups = 'drop')
+        Assigned_identity <- Frequencies %>% 
+                                group_by(Freemuxlet.BEST.GUESS) %>% 
+                                slice_max(Frequency, n = 1) %>% 
+                                ungroup() %>% select(Freemuxlet.BEST.GUESS, Demuxlet.BEST.GUESS)
+        for (i in Assigned_identity\$Freemuxlet.BEST.GUESS){
+            FreemuxletData\$Freemuxlet.BEST.GUESS[FreemuxletData\$Freemuxlet.BEST.GUESS == i] <- Assigned_identity\$Demuxlet.BEST.GUESS[Assigned_identity\$Freemuxlet.BEST.GUESS == i]
+        }
+        names(FreemuxletData) <- c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")
+        ggplot(as.data.frame(PlotData),
+            aes(y = Freq, axis1 = Demuxlet.BEST.GUESS, axis2 = Freemuxlet.BEST.GUESS)) +
+            geom_alluvium(aes(fill = DROPLET.TYPE), width = 1/12) +
+            geom_stratum(width = 1/12, fill = "black", color = "grey") +
+            geom_label(stat = "stratum", aes(label = after_stat(stratum))) +
+            scale_x_discrete(limits = c("Demuxlet.BEST.GUESS", "Freemuxlet.BEST.GUESS"), expand = c(.05, .05)) +
+            scale_fill_brewer(type = "qual", palette = "Set1") +
+            ggtitle("Demuxlet vs Freemuxlet")
+        ggsave("DemultiplexingComparison_${sample_id}.png", width = 21, height = 20, dpi = 300)
+        MultiPlexData <- FreemuxletData
         rownames(MultiPlexData) <- MultiPlexData\$BARCODE
         MultiPlexData\$BARCODE <- NULL
         data <- AddMetaData(data, metadata = MultiPlexData)
@@ -154,19 +213,32 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
     write.table(results, file.path(paste0(fnames, '.txt')), sep = '\\t', quote = F, col.names = T, row.names = T)
 
     datalist <- CreateSeuratObject(counts = Read10X(fnames2), project = fnames, min.cells = 3, min.features = 200)
-    if ("${params.FreemuxletFiles}" != ""){
-        MultiPlexData <- read.delim(paste0("${sample_id}",".clust1.samples"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
+    if (file.exists(paste0("${sample_id}",".Freemuxlet.samples") | file.exists(paste0("${sample_id}",".Demuxlet.best")){
+        if (file.exists(paste0("${sample_id}",".Freemuxlet.samples")){
+            MultiPlexData <- read.delim(paste0("${sample_id}",".Freemuxlet.samples"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
+        } else {
+            MultiPlexData <- read.delim(paste0("${sample_id}",".Demuxlet.best"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]}
         rownames(MultiPlexData) <- MultiPlexData\$BARCODE
         MultiPlexData\$BARCODE <- NULL
         datalist <- AddMetaData(datalist, metadata = MultiPlexData)
         datalist <- subset(datalist, DROPLET.TYPE == "SNG")
     }
-    if ("${params.VCF_Files}" != ""){
-        MultiPlexData <- read.delim(paste0("${sample_id}",".best"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
+    if (file.exists(paste0("${sample_id}",".CombinedDemultiplex.samples"))){
+        Combined <- read.delim(paste0("${sample_id}",".CombinedDemultiplex.samples"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
+        FreemuxletData <- Combined[!is.na(as.numeric(Combined\$SNG.BEST.GUESS)),]
+        FreemuxletDataSNG <- FreemuxletData[FreemuxletData\$DROPLET.TYPE == "SNG",]
+        DemuxletData <- Combined[is.na(as.numeric(Combined\$SNG.BEST.GUESS)),][c("BARCODE","SNG.BEST.GUESS")]
+        names(DemuxletData) <- c("BARCODE","Identity")
+        Joined_table <- inner_join(FreemuxletDataSNG, DemuxletData, by = "BARCODE")
+        Frequencies <- Joined_table %>% group_by(SNG.BEST.GUESS, Identity) %>% summarise(Frequency = n(), .groups = 'drop')
+        Assigned_identity <- Frequencies %>% group_by(SNG.BEST.GUESS) %>% slice_max(Frequency, n = 1) %>% ungroup() %>% select(SNG.BEST.GUESS, Identity)
+        for (i in Assigned_identity\$SNG.BEST.GUESS){
+            FreemuxletData\$SNG.BEST.GUESS[FreemuxletData\$SNG.BEST.GUESS == i] <- Assigned_identity\$Identity[Assigned_identity\$SNG.BEST.GUESS == i]}
+        MultiPlexData <- FreemuxletData
         rownames(MultiPlexData) <- MultiPlexData\$BARCODE
         MultiPlexData\$BARCODE <- NULL
-        datalist <- AddMetaData(datalist, metadata = MultiPlexData)
-        datalist <- subset(datalist, DROPLET.TYPE == "SNG")
+        data <- AddMetaData(data, metadata = MultiPlexData)
+        data <- subset(data, DROPLET.TYPE == "SNG")
     }
     datalist <- RenameCells(datalist, add.cell.id = fnames)    
     datalist <- removeDoublets(file.path(paste0(fnames, '.txt')), datalist)
@@ -328,11 +400,13 @@ process Seurat_QC_integration {
         PostQC <- as.data.frame(table(datalist@meta.data\$orig.ident,datalist@meta.data\$SNG.BEST.GUESS))
         colnames(PostQC) <- c("RunID","SNG.BEST.GUESS","PostQC2")
         Stats <- merge(Stats,PostQC,by="RunID")
+        Stats <- Stats[Stats\$PostQC2 > 0,]
     } 
     if ("${params.VCF_Files}" != ""){
         PostQC <- as.data.frame(table(datalist@meta.data\$orig.ident,datalist@meta.data\$SNG.BEST.GUESS))
         colnames(PostQC) <- c("RunID","SNG.BEST.GUESS","PostQC2")
         Stats <- merge(Stats,PostQC,by="RunID")
+        Stats <- Stats[Stats\$PostQC2 > 0,]
     } 
     write.csv(Stats, "StatsTable.csv", row.names = F)
     datalist <- NormalizeData(datalist, verbose = F)
@@ -642,7 +716,6 @@ process Seurat_Cell_Annotation {
 }
 process CellChat {
     publishDir "${params.outdir}/6-Cell_Communication", mode:'copy'
-    memory = 80.GB
     cpus 60
 
     input:
@@ -720,14 +793,14 @@ process Seurat_create_object_mouse {
     
     input:
     path(reads)
-    path(opt)
+    file(demultiplexData)
+    file(metadata)
 
     output:     
     path("datalist.rds"), emit: rds 
     path("datalist.h5ad"), emit: h5ad 
 
     script:
-    def Sample_metadata_file = opt.name != "" ? "$opt" : ''
     """
     #!/usr/bin/env Rscript
     library(Seurat) ###
@@ -837,8 +910,13 @@ process Seurat_create_object_mouse {
     files <- file.path(fnames)
 
     datalist <- list()
-    if ("$Sample_metadata_file" != ""){
-        meta <- read.delim("$Sample_metadata_file",sep=",")
+    if ("${params.Sample_metadata}" != ""){
+        if(grepl(".tsv","${params.Sample_metadata}")){
+        meta <- read.delim(basename("${params.Sample_metadata}"),sep="\\t")}
+        if(grepl(".tab","${params.Sample_metadata}")){
+        meta <- read.delim(basename("${params.Sample_metadata}"),sep="\\t")}
+        if(grepl(".csv","${params.Sample_metadata}")){
+        meta <- read.delim(basename("${params.Sample_metadata}"),sep=",")}
         for (i in 1:length(files)) {
             datalist[[i]] <- CreateSeuratObject(counts = Read10X(files[i]), project = fnames[i], min.cells = 3, min.features = 200)
             datalist[[i]] <- RenameCells(datalist[[i]], add.cell.id = fnames[i])    
@@ -863,35 +941,39 @@ process Seurat_create_object_mouse {
     file.remove("datalist.h5Seurat")
     """
 }
-workflow {
-    if (params.help == true){
-        print '\nBasic Usage:\n\tnextflow {Path_to_script}/main.nf --dataDir="{Path_to_Data}/RawData/*" --Project_Name="Chile_03" -c {Path_to_script}/nextflow.config --NPlex=4 -resume'
-        print 'Parameters:\n\tMandatories:\n\t\t--dataDir = Sets the input sample table file.\n\t\t--ref_data = Directory with the organism genome processed by cellranger tools.\n\t\t-c = Sets the configuration file.'
-        print '\n\tAlternatives:\n\t\t--Project_Name = Sets a custom directory for the project.\n\t\t--Sample_metadata = File with metadata of samples, must be a Tabular delimited file (TSV|TAB), and must have a column calles "Sample" matching the names of raw data folders.\n\t\t--outdir = Name of directory to save outputs. (def. "LatinCells_Results/${params.Project_Name}/")\n\t\t--NPlex = Sets the number of samples per run in multiplexed libraries.\n\t\t-resume = Continue an analysis after the last well executed part of a workflow,\n\t\t\tbefore a error or a change made in thee code of a process.[Nextflow parameter].\n\t\t--help = Prints this help message.'
-        print 'Output directory:\n\tBy default this workflow creates a directory called "LatinCells_Results/General/" in the working directory.'
-    } else{    
-        print "Proyecto: ${params.Project_Name}"
-        print "Directorio de Salida: ${params.outdir}"
-        print "Muestras en: ${params.dataDir}"
-        Cellranger(dataDir_ch,ref_data_ch)
-        if (params.NPlex != ""){
-            print "Demultiplex activado ${params.NPlex}Plex"
-            Freemuxlet(Cellranger.out)  
-        }
+workflow Demultiplex {
+    take:
+        data
+    main:
         if (params.FreemuxletFiles != ""){
             Demultiplex_ch = channel.fromFilePairs(params.FreemuxletFiles, size: -1).map{it[1]}.collect()
         } else {
-            if (params.VCF_Files != ""){
+            if (params.Freemuxlet != false & params.VCF_Files != ""){
                 VCFs = channel.fromFilePairs(params.VCF_Files, size: -1)
-                Demuxlet(Cellranger.out.combine(VCFs, by: 0))
-                Demultiplex_ch = Demuxlet.out.map{it[1]}.collect()
+                CombinedFremuxletDemuxlet(data.combine(VCFs, by: 0))
+                Demultiplex_ch = CombinedFremuxletDemuxlet.out.map{it[1]}.collect()
             } else {
-            Demultiplex_ch = channel.of("None").combine(Cellranger.out.map{it[0]}).map{it[0]}
+                if (params.Freemuxlet != false){
+                    print "Demultiplex activado ${params.NPlex}Plex"
+                    Freemuxlet(data)
+                }
+                if (params.VCF_Files != ""){
+                    VCFs = channel.fromFilePairs(params.VCF_Files, size: -1)
+                    Demuxlet(data.combine(VCFs, by: 0))
+                    Demultiplex_ch = Demuxlet.out.map{it[1]}.collect()
+                } else {
+                    Demultiplex_ch = channel.of("None").combine(data.map{it[0]}).map{it[0]}
+                }
             }
         }
-
-        SoupX_scDblFinder(Cellranger.out,Demultiplex_ch)
-        Clean_outs = SoupX_scDblFinder.out
+    emit:
+        Demultiplex_ch
+}
+workflow ObjectCreation {
+    take:
+        Clean_outs
+        DemultiplexData
+    main:
         if (params.Sample_metadata != ""){
             MetaDataFiles_ch = channel.fromPath(params.Sample_metadata)
             MetaDataFiles_ch.view()
@@ -899,41 +981,75 @@ workflow {
             MetaDataFiles_ch = channel.of("None")
         }
         if (params.Mouse != false){ 
-        Seurat_create_object_mouse(Clean_outs.clean_reads.collect())
+        Seurat_create_object_mouse(Clean_outs.collect(),DemultiplexData,MetaDataFiles_ch)
+        scObject = Seurat_create_object_mouse.out.rds
         } else {
-        Seurat_Object_creation(Clean_outs.clean_reads.collect(),Demultiplex_ch,MetaDataFiles_ch)   
-        Seurat_QC_integration(Seurat_Object_creation.out.rds, Clean_outs.Stats.collect())
+        Seurat_Object_creation(Clean_outs.collect(),DemultiplexData,MetaDataFiles_ch)
+        scObject = Seurat_Object_creation.out.rds}
+        emit:
+            scObject
+}
+workflow CellAnnotation {
+    take:
+        data
+        data2
+    main:
         if (params.ModelsCelltypist != ""){
-            CellTypist(Seurat_QC_integration.out.DataForCelltypist)
+            CellTypist(data2)
             CellTypistData = CellTypist.out.Celltypist_annotations
         } else {
             CellTypistData = channel.of("None")
         }
-        Seurat_Cell_Annotation(Seurat_QC_integration.out.rds,CellTypistData)
-        CellChat(Seurat_Cell_Annotation.out.rds)
-        }
-    }
-}
-workflow NoIntegration {    
-    Cellranger(dataDir_ch,ref_data_ch)
-    if (params.NPlex != ""){
-        Freemuxlet(Cellranger.out)  
-    }
-    if (params.FreemuxletFiles != ""){
-        Demultiplex_ch = channel.fromFilePairs(params.FreemuxletFiles, size: -1) 
-    }
-    SoupX_scDblFinder(Cellranger.out)
-    if (params.Mouse != false){ 
-    Seurat_create_object_mouse(SoupX_scDblFinder.out.clean_reads.collect())
-    } else {
-    Seurat_Object_creation(SoupX_scDblFinder.out.clean_reads.collect(),Demultiplex_ch.map{it[1]}.collect())   
-    }
+        Seurat_Cell_Annotation(data,CellTypistData)
+    emit:
+        Seurat_Cell_Annotation.out.rds
 }
 workflow Maping { 
-    Cellranger(dataDir_ch,ref_data_ch)
-    if (params.NPlex != ""){
-        Freemuxlet(Cellranger.out)  
-    }
+    take:
+        data
+        data2
+    main: 
+        Cellranger(data,data2)
+    emit: 
+        Cellranger.out
+}
+workflow {
+    if (params.help == true){
+        print '\nBasic Usage:\n\tnextflow {Path_to_script}/main.nf --dataDir="{Path_to_Data}/RawData/*" --Project_Name="Chile_03" -c {Path_to_script}/nextflow.config --NPlex=4 -resume'
+        print 'Parameters:\n\tMandatories:\n\t\t--dataDir = Sets the input sample table file.\n\t\t--ref_data = Directory with the organism genome processed by cellranger tools.\n\t\t-c = Sets the configuration file.'
+        print '\n\tAlternatives:\n\t\t--Project_Name = Sets a custom directory for the project.\n\t\t--Sample_metadata = File with metadata of samples, must be a Tabular delimited file (TSV|TAB), and must have a column calles "Sample" matching the names of raw data folders.\n\t\t--outdir = Name of directory to save outputs. (def. "LatinCells_Results/${params.Project_Name}/")\n\t\t--NPlex = Sets the number of samples per run in multiplexed libraries.\n\t\t-resume = Continue an analysis after the last well executed part of a workflow,\n\t\t\tbefore a error or a change made in thee code of a process.[Nextflow parameter].\n\t\t--help = Prints this help message.'
+        print 'Output directory:\n\tBy default this workflow creates a directory called "LatinCells_Results/General/" in the working directory.'
+    } else{   
+        // Channels definition
+        dataDir_ch = channel.fromFilePairs(params.dataDir, type: 'dir', size: -1) 
+        ref_data_ch = channel.fromPath(params.ref_data, type: 'dir') 
+        out_dir = file(params.outdir)
+        out_dir.mkdir() 
+        print "Proyecto: ${params.Project_Name}"
+        print "Directorio de Salida: ${params.outdir}"
+        print "Muestras en: ${params.dataDir}"
+        Maping(dataDir_ch,ref_data_ch)
+        Demultiplex(Maping.out)
+        SoupX_scDblFinder(Maping.out,Demultiplex.out)
+        ObjectCreation(SoupX_scDblFinder.out.clean_reads,Demultiplex.out)
+        Seurat_QC_integration(ObjectCreation.out, SoupX_scDblFinder.out.Stats.collect())
+        CellAnnotation(Seurat_QC_integration.out.rds,Seurat_QC_integration.out.DataForCelltypist)
+        CellChat(CellAnnotation.out)
+        }
+}
+workflow NoIntegration { 
+    // Channels definition
+    dataDir_ch = channel.fromFilePairs(params.dataDir, type: 'dir', size: -1) 
+    ref_data_ch = channel.fromPath(params.ref_data, type: 'dir') 
+    out_dir = file(params.outdir)
+    out_dir.mkdir() 
+    print "Proyecto: ${params.Project_Name}"
+    print "Directorio de Salida: ${params.outdir}"
+    print "Muestras en: ${params.dataDir}"
+    Maping(dataDir_ch,ref_data_ch)
+    Demultiplex(Maping.out)
+    SoupX_scDblFinder(Maping.out,Demultiplex.out)
+    ObjectCreation(SoupX_scDblFinder.out.clean_reads,Demultiplex.out)
 }
 workflow prueba {    
 }
