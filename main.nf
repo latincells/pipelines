@@ -52,8 +52,9 @@ process Freemuxlet {
 
     script:
     """
+    bedtools merge -i /tmp/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf | samtools view -@ 8 --write-index -L - -D CB:<(zcat ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz) -o filtered_bam.bam ${reads}/outs/possorted_genome_bam.bam
     mkdir Pileup_files
-    popscle dsc-pileup --sam ${reads}/outs/possorted_genome_bam.bam --vcf /tmp/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --out Pileup_files/${sample_id}
+    popscle dsc-pileup --sam filtered_bam.bam --vcf /tmp/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --out Pileup_files/${sample_id}
     mkdir Freemuxlet_outs
     popscle freemuxlet --plp Pileup_files/${sample_id} --out Freemuxlet_outs/${sample_id} --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --nsample ${params.NPlex}
     gunzip Freemuxlet_outs/${sample_id}.clust1.samples.gz
@@ -63,9 +64,9 @@ process Freemuxlet {
 process CombinedFremuxletDemuxlet {
     label 'Demultiplex'
     publishDir "${params.outdir}/Metadata", mode:'copy'  
-    cpus 60
-    memory 135.GB
-    maxForks 1
+    cpus 20
+    memory 50.GB
+    maxForks 2
     tag "Freemuxlet on $sample_id"
     errorStrategy 'ignore'
     
