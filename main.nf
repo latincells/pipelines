@@ -132,7 +132,14 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
     #!/usr/bin/env Rscript
     library(SoupX)
     library(DropletUtils)
-    set.seed(123)   
+    set.seed(123)
+    seurat_theme <- function(){
+    theme_bw() +
+        theme(panel.background = element_rect(colour = "black", size=0.1), 
+            plot.title = element_text(hjust = 0.5, angle = 0, size = 15, face = "bold", vjust = 1),
+            axis.ticks.length=unit(.2, "cm"), axis.text = element_text(size=11), 
+            panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+    }   
     sc = load10X("${reads}/outs/")
     StatsTable <- data.frame("RunID"="${sample_id}", "CellRanger" = ncol(sc\$toc))
     png("SoupX_${sample_id}.png",width=1080, height=1080)
@@ -160,8 +167,8 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
 
     data <- CreateSeuratObject(counts = Read10X(fnames2), min.cells = 3, min.features = 200)
     StatsTable\$SeuratInitial <- ncol(data)
-    if (file.exists(paste0("${sample_id}",".Freemuxlet.samples") | file.exists(paste0("${sample_id}",".Demuxlet.best")){
-        if (file.exists(paste0("${sample_id}",".Freemuxlet.samples")){
+    if (file.exists(paste0("${sample_id}",".Freemuxlet.samples")) | file.exists(paste0("${sample_id}",".Demuxlet.best"))){
+        if (file.exists(paste0("${sample_id}",".Freemuxlet.samples"))){
             MultiPlexData <- read.delim(paste0("${sample_id}",".Freemuxlet.samples"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
         } else {
             MultiPlexData <- read.delim(paste0("${sample_id}",".Demuxlet.best"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]}
@@ -199,7 +206,7 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
             geom_label(stat = "stratum", aes(label = after_stat(stratum))) +
             scale_x_discrete(limits = c("Demuxlet.BEST.GUESS", "Freemuxlet.BEST.GUESS"), expand = c(.05, .05)) +
             scale_fill_brewer(type = "qual", palette = "Set1") +
-            ggtitle("Demuxlet vs Freemuxlet")
+            ggtitle("Demuxlet vs Freemuxlet") + seurat_theme()
         ggsave("DemultiplexingComparison_${sample_id}.png", width = 21, height = 20, dpi = 300)
         MultiPlexData <- FreemuxletData
         rownames(MultiPlexData) <- MultiPlexData\$BARCODE
@@ -214,8 +221,8 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
     write.table(results, file.path(paste0(fnames, '.txt')), sep = '\\t', quote = F, col.names = T, row.names = T)
 
     datalist <- CreateSeuratObject(counts = Read10X(fnames2), project = fnames, min.cells = 3, min.features = 200)
-    if (file.exists(paste0("${sample_id}",".Freemuxlet.samples") | file.exists(paste0("${sample_id}",".Demuxlet.best")){
-        if (file.exists(paste0("${sample_id}",".Freemuxlet.samples")){
+    if (file.exists(paste0("${sample_id}",".Freemuxlet.samples")) | file.exists(paste0("${sample_id}",".Demuxlet.best"))){
+        if (file.exists(paste0("${sample_id}",".Freemuxlet.samples"))){
             MultiPlexData <- read.delim(paste0("${sample_id}",".Freemuxlet.samples"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
         } else {
             MultiPlexData <- read.delim(paste0("${sample_id}",".Demuxlet.best"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]}
@@ -238,8 +245,8 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
         MultiPlexData <- FreemuxletData
         rownames(MultiPlexData) <- MultiPlexData\$BARCODE
         MultiPlexData\$BARCODE <- NULL
-        data <- AddMetaData(data, metadata = MultiPlexData)
-        data <- subset(data, DROPLET.TYPE == "SNG")
+        datalist <- AddMetaData(datalist, metadata = MultiPlexData)
+        datalist <- subset(datalist, DROPLET.TYPE == "SNG")
     }
     datalist <- RenameCells(datalist, add.cell.id = fnames)    
     datalist <- removeDoublets(file.path(paste0(fnames, '.txt')), datalist)
@@ -284,27 +291,40 @@ process Seurat_Object_creation {
 
     for (i in 1:length(files)) {
         datalist[[i]] <- CreateSeuratObject(counts = Read10X(files[i]), project = fnames[i], min.cells = 3, min.features = 200)  
-        if ("${params.FreemuxletFiles}" != ""){
-        MultiPlexData <- read.delim(paste0(files[i],".clust1.samples"),sep="\\t")[c("BARCODE","NUM.SNPS","NUM.READS","DROPLET.TYPE","SNG.BEST.GUESS")]
-        MultiPlexData\$BARCODE <- paste0(files[i],"_",MultiPlexData\$BARCODE)
-        if ("${params.Sample_metadata}" != ""){
-            MultiPlexData <- merge(MultiPlexData, meta, by.x = "SNG.BEST.GUESS", by.y = "Sample")
+        if (file.exists(paste0(files[i],".Freemuxlet.samples")) | file.exists(paste0(files[i],".Demuxlet.best"))){
+            if (file.exists(paste0(files[i],".Freemuxlet.samples"))){
+                MultiPlexData <- read.delim(paste0(files[i],".Freemuxlet.samples"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
+            } else {
+                MultiPlexData <- read.delim(paste0(files[i],".Demuxlet.best"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]}
+            MultiPlexData\$BARCODE <- paste0(files[i],"_",MultiPlexData\$BARCODE)
+            if ("${params.Sample_metadata}" != ""){
+                MultiPlexData <- merge(MultiPlexData, meta, by.x = "SNG.BEST.GUESS", by.y = "Sample")
+            }
+            rownames(MultiPlexData) <- MultiPlexData\$BARCODE
+            MultiPlexData\$BARCODE <- NULL
+            datalist[[i]] <- AddMetaData(datalist[[i]], metadata = MultiPlexData)
+            Multiplex <- "Si"
         }
-        rownames(MultiPlexData) <- MultiPlexData\$BARCODE
-        MultiPlexData\$BARCODE <- NULL
-        datalist[[i]] <- AddMetaData(datalist[[i]], metadata = MultiPlexData)
-        Multiplex <- "Si"
-        }
-        if ("${params.VCF_Files}" != ""){
-        MultiPlexData <- read.delim(paste0(files[i],".best"),sep="\\t")[c("BARCODE","NUM.SNPS","NUM.READS","DROPLET.TYPE","SNG.BEST.GUESS")]
-        MultiPlexData\$BARCODE <- paste0(files[i],"_",MultiPlexData\$BARCODE)
-        if ("${params.Sample_metadata}" != ""){
-            MultiPlexData <- merge(MultiPlexData, meta, by.x = "SNG.BEST.GUESS", by.y = "Sample")
-        }
-        rownames(MultiPlexData) <- MultiPlexData\$BARCODE
-        MultiPlexData\$BARCODE <- NULL
-        datalist[[i]] <- AddMetaData(datalist[[i]], metadata = MultiPlexData)
-        Multiplex <- "Si"
+        if (file.exists(paste0(files[i],".CombinedDemultiplex.samples"))){
+                Combined <- read.delim(paste0(files[i],".CombinedDemultiplex.samples"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
+                FreemuxletData <- Combined[!is.na(as.numeric(Combined\$SNG.BEST.GUESS)),]
+                FreemuxletDataSNG <- FreemuxletData[FreemuxletData\$DROPLET.TYPE == "SNG",]
+                DemuxletData <- Combined[is.na(as.numeric(Combined\$SNG.BEST.GUESS)),][c("BARCODE","SNG.BEST.GUESS")]
+                names(DemuxletData) <- c("BARCODE","Identity")
+                Joined_table <- inner_join(FreemuxletDataSNG, DemuxletData, by = "BARCODE")
+                Frequencies <- Joined_table %>% group_by(SNG.BEST.GUESS, Identity) %>% summarise(Frequency = n(), .groups = 'drop')
+                Assigned_identity <- Frequencies %>% group_by(SNG.BEST.GUESS) %>% slice_max(Frequency, n = 1) %>% ungroup() %>% select(SNG.BEST.GUESS, Identity)
+                for (k in Assigned_identity\$SNG.BEST.GUESS){
+                    FreemuxletData\$SNG.BEST.GUESS[FreemuxletData\$SNG.BEST.GUESS == k] <- Assigned_identity\$Identity[Assigned_identity\$SNG.BEST.GUESS == k]}
+                MultiPlexData <- FreemuxletData
+                MultiPlexData\$BARCODE <- paste0(files[i],"_",MultiPlexData\$BARCODE)
+                if ("${params.Sample_metadata}" != ""){
+                    MultiPlexData <- merge(MultiPlexData, meta, by.x = "SNG.BEST.GUESS", by.y = "Sample")
+                }
+                rownames(MultiPlexData) <- MultiPlexData\$BARCODE
+                MultiPlexData\$BARCODE <- NULL
+                datalist[[i]] <- AddMetaData(datalist[[i]], metadata = MultiPlexData)
+                Multiplex <- "Si"
         }
         if (Multiplex == "No"){
             if ("${params.Sample_metadata}" != ""){
@@ -383,7 +403,7 @@ process Seurat_QC_integration {
         datalist@meta.data\$SNG.BEST.GUESS <- LETTERS[best_guess_numbers]
     }
     datalist[["percent.mt"]] <- PercentageFeatureSet(datalist, pattern="^MT-")
-    VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3,group.by = "${params.Batch}")
+    VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3,group.by = "${params.Batch}",raster=FALSE)
     ggsave(paste0("Analysis/Images/1-QC/Pre-QC.byBatch.png"), width = 16, height = 9)
     datalist <- NormalizeData(datalist, verbose = F) %>% AddModuleScore(features = list(hk), name = "housekeeping") %>% AddModuleScore(features = list(ribo), name = "ribo.percent")
     print("Splitting for QC per sample")
@@ -411,7 +431,7 @@ process Seurat_QC_integration {
     } 
     write.csv(Stats, "StatsTable.csv", row.names = F)
     datalist <- NormalizeData(datalist, verbose = F)
-    VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3,group.by = "${params.Batch}")
+    VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3,group.by = "${params.Batch}",raster=FALSE)
     ggsave(paste0("Analysis/Images/1-QC/QC.byBatch.png"), width = 16, height = 9)
     ###################################################################################################################################################
     datalist <- FindVariableFeatures(datalist, selection.method = "vst", nfeatures = 2000, verbose = F)
@@ -424,7 +444,7 @@ process Seurat_QC_integration {
     datalist <- RunPCA(datalist, verbose = F)
 
     datalist <- SetIdent(datalist,value = "orig.ident")
-    DimPlot(datalist, reduction = "pca")
+    DimPlot(datalist, reduction = "pca",raster=FALSE)
     ggsave(paste0("Analysis/Images/1-QC/PCA.png"), width = 9, height = 9)
     Best_PC <- optimizePCA(datalist, 0.8) # 0.8 is % of variance explained by these PCs
     ElbowPlot(datalist, ndims = length(datalist@reductions\$pca), reduction = "pca") + geom_vline(xintercept=Best_PC, linetype = "dashed", color = "red")
@@ -432,27 +452,27 @@ process Seurat_QC_integration {
     datalist <- RunUMAP(datalist, reduction = "pca", dims = 1:Best_PC, verbose = F, min.dist = 0.3, seed.use = 123, umap.method = "umap-learn", metric = "correlation")
     ###################################################################################################################################################
     if ("${params.Batch}" != "orig.ident"){
-        DimPlot(datalist,reduction = "umap", group.by = "${params.Batch}", cols = colors) + seurat_theme()
+        DimPlot(datalist,reduction = "umap", group.by = "${params.Batch}", cols = colors,raster=FALSE) + seurat_theme()
         ggsave(paste0("Analysis/Images/2-PreIntegration/Batch.png"), width = 9, height = 9)
     } else {
-        DimPlot(datalist,reduction = "umap", group.by = "orig.ident", cols = colors) + seurat_theme()
+        DimPlot(datalist,reduction = "umap", group.by = "orig.ident", cols = colors,raster=FALSE) + seurat_theme()
         ggsave(paste0("Analysis/Images/2-PreIntegration/Orig.ident.png"), width = 9, height = 9)
     }
-    DimPlot(datalist, group.by = 'Phase', reduction = 'umap') + seurat_theme()
+    DimPlot(datalist, group.by = 'Phase', reduction = 'umap',raster=FALSE) + seurat_theme()
     ggsave("Analysis/Images/2-PreIntegration/Phase.png", width = 9, height = 9)
-    datalist %>% FeaturePlot(reduction = "umap",features="nCount_RNA") + seurat_theme()
+    datalist %>% FeaturePlot(reduction = "umap",features="nCount_RNA",raster=FALSE) + seurat_theme()
     ggsave(paste0("Analysis/Images/2-PreIntegration/nCount_RNA.png"), width = 9, height = 9)
-    datalist %>% FeaturePlot(reduction = "umap",features="ribo.percent1") + seurat_theme()
+    datalist %>% FeaturePlot(reduction = "umap",features="ribo.percent1",raster=FALSE) + seurat_theme()
     ggsave(paste0("Analysis/Images/2-PreIntegration/Ribo.percent1.png"), width = 9, height = 9)
-    datalist %>% FeaturePlot(reduction = "umap",features="percent.mt") + seurat_theme()
+    datalist %>% FeaturePlot(reduction = "umap",features="percent.mt",raster=FALSE) + seurat_theme()
     ggsave(paste0("Analysis/Images/2-PreIntegration/Percent.mt.png"), width = 9, height = 9)
     if ("${params.FreemuxletFiles}" != ""){
         datalist@meta.data\$SNG.BEST.GUESS <- paste0(datalist@meta.data\$orig.ident,"-",datalist@meta.data\$SNG.BEST.GUESS)
-        DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors) + seurat_theme()
+        DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
         ggsave(paste0("Analysis/Images/2-PreIntegration/Demultiplex.png"), width = 9, height = 9)
     }
     if ("${params.VCF_Files}" != ""){
-        DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors) + seurat_theme()
+        DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
         ggsave(paste0("Analysis/Images/2-PreIntegration/Demultiplex.png"), width = 9, height = 9)
     }
     ###################################################################################################################################################
@@ -465,15 +485,15 @@ process Seurat_QC_integration {
             FindNeighbors(reduction = "harmony", dims = 1:Best_PC) %>% 
             FindClusters(resolution = seq(0.2,2.6,0.2)) %>% 
             identity()
-            FeaturePlot(datalist,reduction = "umap",features="nCount_RNA") + seurat_theme()
+            FeaturePlot(datalist,reduction = "umap",features="nCount_RNA",raster=FALSE) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/nCount_RNA.png"), width = 9, height = 9)
-            FeaturePlot(datalist, reduction = "umap",features="ribo.percent1") + seurat_theme()
+            FeaturePlot(datalist, reduction = "umap",features="ribo.percent1",raster=FALSE) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/Ribo.percent1.png"), width = 9, height = 9)
-            DimPlot(datalist, group.by = 'Phase', reduction = 'umap') + seurat_theme()
+            DimPlot(datalist, group.by = 'Phase', reduction = 'umap',raster=FALSE) + seurat_theme()
             ggsave("Analysis/Images/3-PosIntegration/Phase.png", width = 9, height = 9)
-            datalist %>% FeaturePlot(reduction = "umap",features="percent.mt") + seurat_theme()
+            datalist %>% FeaturePlot(reduction = "umap",features="percent.mt",raster=FALSE) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/Percent.mt.png"), width = 9, height = 9)
-            DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors) + seurat_theme()
+            DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
             colnames(datalist@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist@meta.data))
         } else {
@@ -506,26 +526,26 @@ process Seurat_QC_integration {
         colnames(datalist@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist@meta.data))
         ###################################################################################################################################################
         if ("${params.Batch}" != "orig.ident"){
-            DimPlot(datalist,reduction = "umap", group.by = "${params.Batch}", cols = colors) + seurat_theme()
+            DimPlot(datalist,reduction = "umap", group.by = "${params.Batch}", cols = colors,raster=FALSE) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/Batch.png"), width = 9, height = 9)
         } else {
-            DimPlot(datalist,reduction = "umap", group.by = "orig.ident", cols = colors) + seurat_theme()
+            DimPlot(datalist,reduction = "umap", group.by = "orig.ident", cols = colors,raster=FALSE) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/Orig.ident.png"), width = 9, height = 9)
         }
-        FeaturePlot(datalist,reduction = "umap",features="nCount_RNA") + seurat_theme()
+        FeaturePlot(datalist,reduction = "umap",features="nCount_RNA",raster=FALSE) + seurat_theme()
         ggsave(paste0("Analysis/Images/3-PosIntegration/nCount_RNA.png"), width = 9, height = 9)
-        FeaturePlot(datalist, reduction = "umap",features="ribo.percent1") + seurat_theme()
+        FeaturePlot(datalist, reduction = "umap",features="ribo.percent1",raster=FALSE) + seurat_theme()
         ggsave(paste0("Analysis/Images/3-PosIntegration/Ribo.percent1.png"), width = 9, height = 9)
-        DimPlot(datalist, group.by = 'Phase', reduction = 'umap') + seurat_theme()
+        DimPlot(datalist, group.by = 'Phase', reduction = 'umap',raster=FALSE) + seurat_theme()
         ggsave("Analysis/Images/3-PosIntegration/Phase.png", width = 9, height = 9)
-        datalist %>% FeaturePlot(reduction = "umap",features="percent.mt") + seurat_theme()
+        datalist %>% FeaturePlot(reduction = "umap",features="percent.mt",raster=FALSE) + seurat_theme()
         ggsave(paste0("Analysis/Images/3-PosIntegration/Percent.mt.png"), width = 9, height = 9)
         if ("${params.FreemuxletFiles}" != ""){
-            DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors) + seurat_theme()
+            DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
         }
         if ("${params.VCF_Files}" != ""){
-            DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors) + seurat_theme()
+            DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
         }
     }
