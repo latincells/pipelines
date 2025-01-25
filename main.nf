@@ -20,7 +20,7 @@ process Cellranger {
     storeDir "${params.outdir}/1-Counts" 
     cpus 24
     maxForks 2
-    tag "Cellranger on $sample_id"
+    tag "on $sample_id"
     errorStrategy 'ignore'
     
     input: 
@@ -41,7 +41,7 @@ process Freemuxlet {
     cpus 20
     memory 50.GB
     maxForks 2
-    tag "Freemuxlet on $sample_id"
+    tag "on $sample_id"
     errorStrategy 'ignore'
     
     input: 
@@ -67,7 +67,7 @@ process CombinedFremuxletDemuxlet {
     cpus 20
     memory 50.GB
     maxForks 2
-    tag "Freemuxlet on $sample_id"
+    tag "on $sample_id"
     errorStrategy 'ignore'
     
     input: 
@@ -94,7 +94,7 @@ process Demuxlet {
     cpus 10
     memory 10.GB
     maxForks 2
-    tag "Demuxlet on $sample_id"
+    tag "on $sample_id"
     
     input: 
     tuple val(sample_id), path(reads), path(vcf)
@@ -109,13 +109,39 @@ process Demuxlet {
     mv ${sample_id}.best ${sample_id}.Demuxlet.best
     """
 }
+process MappingStats {
+    publishDir "${params.outdir}/Metadata", mode:'copy'  
+    cpus 10
+    memory 2.GB
+    
+    input: 
+    path(CellrangerOuts)
+
+    output:      
+    path("CellrangerRunsSummary.tsv")
+
+    script:
+    """
+    #!/usr/bin/env Rscript
+    DataFrame <- data.frame()
+    for (dir in list.dirs(path = "./", full.names = TRUE, recursive = F)) {
+        print(dir)
+        metrics_summary <- read.csv(paste0(dir, "/outs/metrics_summary.csv"))
+        print(metrics_summary)
+        RunID <- data.frame("RunID" = basename(dir))
+        DataFrame <- rbind(DataFrame,cbind(RunID, metrics_summary))
+    }
+
+    write.table(DataFrame, "CellrangerRunsSummary.tsv", row.names = FALSE, quote = FALSE, sep = "\\t")
+    """
+}
 process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 10X, ya que el script de soupX esta simplificado y data de otro origen necesita la creacion de clusters 
     //publishDir "${params.outdir}/2-SoupX_SCDblFinder", mode:'copy', pattern: "*${sample_id}*"
     publishDir "${params.outdir}/2-SoupX_SCDblFinder", mode:'copy', pattern: '*png'
     cpus 10
     memory 20.GB
     maxForks 4
-    tag "SoupX on $sample_id"
+    tag "on $sample_id"
     errorStrategy 'ignore'
     
     input: 
@@ -133,6 +159,11 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
     library(SoupX)
     library(DropletUtils)
     set.seed(123)
+    DemultiplexingCombinations <- sort(c("AMB-AMB", "AMB-DBL", "AMB-SNG", 
+                                         "DBL-AMB", "DBL-DBL", "DBL-SNG", 
+                                         "SNG-AMB", "SNG-DBL", "SNG-SNG"))
+    colors <- c("#E31A1C","#33A02C","#FF7F00","#6A3D9A","#B15928","olivedrab","#bd18ea","cyan","green3")
+    names(colors) <- DemultiplexingCombinations
     seurat_theme <- function(){
     theme_bw() +
         theme(panel.background = element_rect(colour = "black", size=0.1), 
@@ -202,10 +233,10 @@ process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 1
         ggplot(as.data.frame(PlotData),
             aes(y = Freq, axis1 = Demuxlet.BEST.GUESS, axis2 = Freemuxlet.BEST.GUESS)) +
             geom_alluvium(aes(fill = DROPLET.TYPE), width = 1/12) +
-            geom_stratum(width = 1/12, fill = "black", color = "grey") +
+            geom_stratum(width = 1/12, fill = "grey", color = "black") +
             geom_label(stat = "stratum", aes(label = after_stat(stratum))) +
             scale_x_discrete(limits = c("Demuxlet.BEST.GUESS", "Freemuxlet.BEST.GUESS"), expand = c(.05, .05)) +
-            scale_fill_brewer(type = "qual", palette = "Set1") +
+            scale_fill_manual(values = colors) +
             ggtitle("Demuxlet vs Freemuxlet") + seurat_theme()
         ggsave("DemultiplexingComparison_${sample_id}.png", width = 21, height = 20, dpi = 300)
         MultiPlexData <- FreemuxletData
@@ -1025,7 +1056,7 @@ workflow CellAnnotation {
     emit:
         Seurat_Cell_Annotation.out.rds
 }
-workflow Maping { 
+workflow Mapping { 
     take:
         data
         data2
@@ -1049,9 +1080,10 @@ workflow {
         print "Proyecto: ${params.Project_Name}"
         print "Directorio de Salida: ${params.outdir}"
         print "Muestras en: ${params.dataDir}"
-        Maping(dataDir_ch,ref_data_ch)
-        Demultiplex(Maping.out)
-        SoupX_scDblFinder(Maping.out,Demultiplex.out)
+        Mapping(dataDir_ch,ref_data_ch)
+        MappingStats(Mapping.out.map{it[1]}.collect())
+        Demultiplex(Mapping.out)
+        SoupX_scDblFinder(Mapping.out,Demultiplex.out)
         ObjectCreation(SoupX_scDblFinder.out.clean_reads,Demultiplex.out)
         Seurat_QC_integration(ObjectCreation.out, SoupX_scDblFinder.out.Stats.collect())
         CellAnnotation(Seurat_QC_integration.out.rds,Seurat_QC_integration.out.DataForCelltypist)
@@ -1067,9 +1099,9 @@ workflow NoIntegration {
     print "Proyecto: ${params.Project_Name}"
     print "Directorio de Salida: ${params.outdir}"
     print "Muestras en: ${params.dataDir}"
-    Maping(dataDir_ch,ref_data_ch)
-    Demultiplex(Maping.out)
-    SoupX_scDblFinder(Maping.out,Demultiplex.out)
+    Mapping(dataDir_ch,ref_data_ch)
+    Demultiplex(Mapping.out)
+    SoupX_scDblFinder(Mapping.out,Demultiplex.out)
     ObjectCreation(SoupX_scDblFinder.out.clean_reads,Demultiplex.out)
 }
 workflow prueba {    
