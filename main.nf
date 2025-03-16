@@ -12,12 +12,11 @@ params.NPlex= ""
 params.Sample_metadata = ""
 params.Mouse = false
 params.Freemuxlet = false
-params.FreemuxletFiles = ""
 params.VCF_Files = "" 
 params.ModelsCelltypist = ""
 params.help = false
 process Cellranger {
-    storeDir "${params.outdir}/1-Counts" 
+    storeDir "${params.outdir}/1-Counts"
     cpus 24
     maxForks 2
     tag "on $sample_id"
@@ -29,10 +28,17 @@ process Cellranger {
 
     output:      
     tuple val(sample_id), path("Mapped_$sample_id")
+    path("${sample_id}.web_summary.html")
+    path("*matrix.h5")
 
     script:
     """
-    cellranger count --id=Mapped_$sample_id --fastqs=$reads --sample=$sample_id --transcriptome=$ref_data --create-bam=true --localmem 90
+    cellranger count --id=Mapped_${sample_id} --fastqs=${reads} --sample=${sample_id} --transcriptome=${ref_data} --create-bam=true --localmem 90
+    mv Mapped_${sample_id}/outs/filtered_feature_bc_matrix.h5 Mapped_${sample_id}/outs/${sample_id}.filtered_feature_bc_matrix.h5
+    mv Mapped_${sample_id}/outs/web_summary.html Mapped_${sample_id}/outs/${sample_id}.web_summary.html
+    mv Mapped_${sample_id}/outs/raw_feature_bc_matrix.h5 Mapped_${sample_id}/outs/${sample_id}.raw_feature_bc_matrix.h5
+    mv Mapped_${sample_id}/outs/*matrix.h5 .
+    mv Mapped_${sample_id}/outs/${sample_id}.web_summary.html .
     """
 }
 process Freemuxlet {
@@ -366,6 +372,12 @@ process Seurat_Object_creation {
         }
         print(paste(i, 'out', length(files)))}
     datalist <- Reduce(merge, datalist)
+    if (file.exists(paste0(files[i],".Freemuxlet.samples"))){
+        best_guess_factor <- factor(datalist@meta.data\$SNG.BEST.GUESS)
+        best_guess_numbers <- as.numeric(best_guess_factor)
+        datalist@meta.data\$SNG.BEST.GUESS <- LETTERS[best_guess_numbers]
+        datalist@meta.data\$SNG.BEST.GUESS <- paste0(datalist@meta.data\$orig.ident,"-",datalist@meta.data\$SNG.BEST.GUESS)
+    }
     saveRDS(datalist, 'datalist.rds')
     """
 }
@@ -393,8 +405,9 @@ process Seurat_QC_integration {
     library(harmony)
     })
     colors <- clusterExperiment::bigPalette
+    colors <- colors[colors!="black"]
     assignInNamespace("is_conda_python", function(x){ return(FALSE) }, ns="reticulate")
-    reticulate::use_python("/opt/conda/envs/SingleCell/bin/python3")
+    reticulate::use_python("/opt/conda/envs/LatinCells/bin/python3")
     set.seed(123)
     hk <- c("C1orf43", "CHMP2A", "EMC7", "GPI", "PSMB2", "PSMB4", "RAB7A", "REEP5", "SNRPD3", "VCP", "VPS29")
     ribo <- c('RPLP0', 'RPLP1', 'RPLP2', 'RPL3', 'RPL3L', 'RPL4', 'RPL5', 'RPL6', 'RPL7', 'RPL7A', 'RPL7L1', 'RPL8', 'RPL9', 'RPL10', 'RPL10A', 'RPL11', 'RPL12', 'RPL13', 'RPL13A', 'RPL14', 'RPL15', 'RPL17', 'RPL18', 'RPL18A', 'RPL19', 'RPL21', 'RPL22', 'RPL22L1', 'RPL23', 'RPL23A', 'RPL24', 'RPL26', 'RPL26L1', 'RPL27', 'RPL27A', 'RPL28', 'RPL29', 'RPL30', 'RPL31', 'RPL32', 'RPL34', 'RPL35', 'RPL35A', 'RPL36', 'RPL36A', 'RPL36AL', 'RPL37', 'RPL37A', 'RPL38', 'RPL39', 'RPL39L', 'RPL41', 'RPSA', 'RPS2', 'RPS3', 'RPS3A', 'RPS4X', 'RPS4Y1', 'RPS5', 'RPS6', 'RPS7', 'RPS8', 'RPS9', 'RPS10', 'RPS11', 'RPS12', 'RPS13', 'RPS14', 'RPS15', 'RPS15A', 'RPS16', 'RPS17', 'RPS18', 'RPS19', 'RPS20', 'RPS21', 'RPS23', 'RPS24', 'RPS25', 'RPS26', 'RPS27', 'RPS27A', 'RPS28', 'RPS29')
@@ -428,15 +441,11 @@ process Seurat_QC_integration {
     system("mkdir -p Analysis/Images/1-QC/")
     system("mkdir -p Analysis/Images/2-PreIntegration/")
     datalist <- readRDS("${Datalist}") %>% JoinLayers()
-    if ("${params.FreemuxletFiles}" != ""){
-        best_guess_factor <- factor(datalist@meta.data\$SNG.BEST.GUESS)
-        best_guess_numbers <- as.numeric(best_guess_factor)
-        datalist@meta.data\$SNG.BEST.GUESS <- LETTERS[best_guess_numbers]
-    }
     datalist[["percent.mt"]] <- PercentageFeatureSet(datalist, pattern="^MT-")
     VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3,group.by = "${params.Batch}",raster=FALSE)
     ggsave(paste0("Analysis/Images/1-QC/Pre-QC.byBatch.png"), width = 16, height = 9)
-    datalist <- NormalizeData(datalist, verbose = F) %>% AddModuleScore(features = list(hk), name = "housekeeping") %>% AddModuleScore(features = list(ribo), name = "ribo.percent")
+    datalist <- datalist %>% NormalizeData(verbose = FALSE) %>% subset(subset = nFeature_RNA > 200 & percent.mt < 10 & nCount_RNA > 850)
+    datalist <- datalist %>% AddModuleScore(features = list(hk), name = "housekeeping") %>% AddModuleScore(features = list(ribo), name = "ribo.percent")
     print("Splitting for QC per sample")
     datalist <- SplitObject(datalist, split.by = "orig.ident")
     contador = 0
@@ -444,23 +453,19 @@ process Seurat_QC_integration {
     for (elemento in datalist[1:length(datalist)]){
         contador = contador + 1
         print(paste0("QC en muestra N°: ",contador))
-        datalist[[contador]] <- elemento %>% NormalizeData(verbose = FALSE) %>% subset(subset = nFeature_RNA > 200 & nCount_RNA < (median(nCount_RNA) + 5*mad(nCount_RNA)) & percent.mt < 10)
+        datalist[[contador]] <- elemento %>% NormalizeData(verbose = FALSE) %>% subset(subset = nCount_RNA < (median(nCount_RNA) + 5*mad(nCount_RNA)))
         Stats[Stats\$RunID == unique(elemento@meta.data\$orig.ident),]\$PostQC <- ncol(datalist[[contador]])
+        gc()
     }
     datalist <- Reduce(merge, datalist) %>% JoinLayers()
-    if ("${params.FreemuxletFiles}" != ""){
-        PostQC <- as.data.frame(table(datalist@meta.data\$orig.ident,datalist@meta.data\$SNG.BEST.GUESS))
-        colnames(PostQC) <- c("RunID","SNG.BEST.GUESS","PostQC2")
-        Stats <- merge(Stats,PostQC,by="RunID")
-        Stats <- Stats[Stats\$PostQC2 > 0,]
-    } 
-    if ("${params.VCF_Files}" != ""){
+    if (any(colnames(datalist@meta.data) == "SNG.BEST.GUESS")){
         PostQC <- as.data.frame(table(datalist@meta.data\$orig.ident,datalist@meta.data\$SNG.BEST.GUESS))
         colnames(PostQC) <- c("RunID","SNG.BEST.GUESS","PostQC2")
         Stats <- merge(Stats,PostQC,by="RunID")
         Stats <- Stats[Stats\$PostQC2 > 0,]
     } 
     write.csv(Stats, "StatsTable.csv", row.names = F)
+    gc()
     datalist <- NormalizeData(datalist, verbose = F)
     VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3,group.by = "${params.Batch}",raster=FALSE)
     ggsave(paste0("Analysis/Images/1-QC/QC.byBatch.png"), width = 16, height = 9)
@@ -471,13 +476,14 @@ process Seurat_QC_integration {
     #all.genes <- rownames(datalist)
     datalist <- ScaleData(datalist, verbose = F) # ,features = all.genes
     datalist <- CellCycleScoring(datalist,s.features = cc.genes\$s.genes, g2m.features = cc.genes\$g2m.genes, set.ident = TRUE, search = TRUE)
+    gc()
     datalist <- ScaleData(datalist,vars.to.regress = c('percent.mt', 'S.Score', 'G2M.Score')) #, 'housekeeping1', 'ribo.percent1', 'nFeature_RNA', 'nCount_RNA',
     datalist <- RunPCA(datalist, verbose = F)
 
     datalist <- SetIdent(datalist,value = "orig.ident")
     DimPlot(datalist, reduction = "pca",raster=FALSE)
     ggsave(paste0("Analysis/Images/1-QC/PCA.png"), width = 9, height = 9)
-    Best_PC <- optimizePCA(datalist, 0.8) # 0.8 is % of variance explained by these PCs
+    Best_PC <- optimizePCA(datalist, 0.9) # 0.9 is % of variance explained by these PCs
     ElbowPlot(datalist, ndims = length(datalist@reductions\$pca), reduction = "pca") + geom_vline(xintercept=Best_PC, linetype = "dashed", color = "red")
     ggsave(paste0("Analysis/Images/1-QC/ElbowPlot.png"), width = 9, height = 9, bg="white")
     datalist <- RunUMAP(datalist, reduction = "pca", dims = 1:Best_PC, verbose = F, min.dist = 0.3, seed.use = 123, umap.method = "umap-learn", metric = "correlation")
@@ -497,14 +503,11 @@ process Seurat_QC_integration {
     ggsave(paste0("Analysis/Images/2-PreIntegration/Ribo.percent1.png"), width = 9, height = 9)
     datalist %>% FeaturePlot(reduction = "umap",features="percent.mt",raster=FALSE) + seurat_theme()
     ggsave(paste0("Analysis/Images/2-PreIntegration/Percent.mt.png"), width = 9, height = 9)
-    if ("${params.FreemuxletFiles}" != ""){
-        datalist@meta.data\$SNG.BEST.GUESS <- paste0(datalist@meta.data\$orig.ident,"-",datalist@meta.data\$SNG.BEST.GUESS)
-        DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
-        ggsave(paste0("Analysis/Images/2-PreIntegration/Demultiplex.png"), width = 9, height = 9)
-    }
-    if ("${params.VCF_Files}" != ""){
-        DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
-        ggsave(paste0("Analysis/Images/2-PreIntegration/Demultiplex.png"), width = 9, height = 9)
+    if (any(colnames(datalist@meta.data) == "SNG.BEST.GUESS")){
+        if (length(unique(datalist@meta.data\$SNG.BEST.GUESS)) <= length(colors)){
+            DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
+            ggsave(paste0("Analysis/Images/2-PreIntegration/Demultiplex.png"), width = 9, height = 9)
+        }
     }
     ###################################################################################################################################################
     if (length(unique(datalist@meta.data\$orig.ident)) == 1){
@@ -524,8 +527,10 @@ process Seurat_QC_integration {
             ggsave("Analysis/Images/3-PosIntegration/Phase.png", width = 9, height = 9)
             datalist %>% FeaturePlot(reduction = "umap",features="percent.mt",raster=FALSE) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/Percent.mt.png"), width = 9, height = 9)
-            DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
-            ggsave(paste0("Analysis/Images/3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
+            if (length(unique(datalist@meta.data\$SNG.BEST.GUESS)) <= length(colors)){
+                DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
+                ggsave(paste0("Analysis/Images/3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
+            }
             colnames(datalist@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist@meta.data))
         } else {
             datalist <- datalist %>% 
@@ -571,13 +576,11 @@ process Seurat_QC_integration {
         ggsave("Analysis/Images/3-PosIntegration/Phase.png", width = 9, height = 9)
         datalist %>% FeaturePlot(reduction = "umap",features="percent.mt",raster=FALSE) + seurat_theme()
         ggsave(paste0("Analysis/Images/3-PosIntegration/Percent.mt.png"), width = 9, height = 9)
-        if ("${params.FreemuxletFiles}" != ""){
-            DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
-            ggsave(paste0("Analysis/Images/3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
-        }
-        if ("${params.VCF_Files}" != ""){
-            DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
-            ggsave(paste0("Analysis/Images/3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
+        if (any(colnames(datalist@meta.data) == "SNG.BEST.GUESS")){
+            if (length(unique(datalist@meta.data\$SNG.BEST.GUESS)) <= length(colors)){
+                DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
+                ggsave(paste0("Analysis/Images/3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
+            }
         }
     }
     saveRDS(datalist, 'datalist.postQC-int.rds')
@@ -637,6 +640,38 @@ process CellTypist {
             Model.to_csv(ModelName +'_Celltypist_annotation.csv')
 
     Celltypist_annotation("DataForCelltypist/")
+    """
+}
+process RunAzimuth {
+    publishDir "${params.outdir}/5-Seurat-Cell_Annotation", mode:'copy'
+    
+    input:
+    path(Datalist)
+
+    output:    
+    path("*.png")
+
+    script:
+    """
+    #!/usr/bin/env Rscript
+    library(Seurat)
+    library(Azimuth)
+    library(ggplot2)
+    library(patchwork)
+    colors <- clusterExperiment::bigPalette
+    options(timeout=100000000)
+    options(future.globals.maxSize = 4 * 1024^3)  # 4 GB
+    seurat_theme <- function(){
+        theme_bw() +
+            theme(panel.background = element_rect(colour = "black", size=0.1), 
+                plot.title = element_text(hjust = 0.5, angle = 0, size = 15, face = "bold", vjust = 1),
+                axis.ticks.length=unit(.2, "cm"), axis.text = element_text(size=11), 
+                panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+        }
+    datalist <- RunAzimuth("${Datalist}", reference = "pbmcref")
+
+    DimPlot(datalist, reduction = "ref.umap", group.by = c("seurat_clusters","predicted.celltype.l2"),label=T,repel=T,raster=FALSE, cols = colors) + seurat_theme()
+    ggsave("Azimuth.png",width = 9, height = 9)
     """
 }
 process Seurat_Cell_Annotation {
@@ -805,7 +840,7 @@ process CellChat {
     cellChat <- subsetData(cellChat) # This step is necessary even if using the whole database
     cellChat <- identifyOverExpressedGenes(cellChat)
     cellChat <- identifyOverExpressedInteractions(cellChat)
-    cellChat <- projectData(cellChat, PPI.human)
+    cellChat <- smoothData(cellChat, adj = PPI.human)
     cellChat <- computeCommunProb(cellChat, type = "triMean", raw.use = F) # LR pairs
     ##############################################################################################
     # Infer the cell-cell communication at a signaling pathway level
@@ -997,18 +1032,16 @@ workflow Demultiplex {
     take:
         data
     main:
-        if (params.FreemuxletFiles != ""){
-            Demultiplex_ch = channel.fromFilePairs(params.FreemuxletFiles, size: -1).map{it[1]}.collect()
+        if (params.Freemuxlet != false & params.VCF_Files == ""){
+            print "Demultiplex activado ${params.NPlex}Plex"
+            Freemuxlet(data)
+            Demultiplex_ch = Freemuxlet.out.map{it[1]}.collect()
         } else {
             if (params.Freemuxlet != false & params.VCF_Files != ""){
                 VCFs = channel.fromFilePairs(params.VCF_Files, size: -1)
                 CombinedFremuxletDemuxlet(data.combine(VCFs, by: 0))
                 Demultiplex_ch = CombinedFremuxletDemuxlet.out.map{it[1]}.collect()
             } else {
-                if (params.Freemuxlet != false){
-                    print "Demultiplex activado ${params.NPlex}Plex"
-                    Freemuxlet(data)
-                }
                 if (params.VCF_Files != ""){
                     VCFs = channel.fromFilePairs(params.VCF_Files, size: -1)
                     Demuxlet(data.combine(VCFs, by: 0))
@@ -1053,6 +1086,7 @@ workflow CellAnnotation {
             CellTypistData = channel.of("None")
         }
         Seurat_Cell_Annotation(data,CellTypistData)
+        RunAzimuth(data)
     emit:
         Seurat_Cell_Annotation.out.rds
 }
@@ -1063,7 +1097,7 @@ workflow Mapping {
     main: 
         Cellranger(data,data2)
     emit: 
-        Cellranger.out
+        Cellranger.out[0]
 }
 workflow {
     if (params.help == true){
@@ -1103,6 +1137,18 @@ workflow NoIntegration {
     Demultiplex(Mapping.out)
     SoupX_scDblFinder(Mapping.out,Demultiplex.out)
     ObjectCreation(SoupX_scDblFinder.out.clean_reads,Demultiplex.out)
+}
+workflow JustMapping { 
+    // Channels definition
+    dataDir_ch = channel.fromFilePairs(params.dataDir, type: 'dir', size: -1) 
+    ref_data_ch = channel.fromPath(params.ref_data, type: 'dir') 
+    out_dir = file(params.outdir)
+    out_dir.mkdir() 
+    print "Proyecto: ${params.Project_Name}"
+    print "Directorio de Salida: ${params.outdir}"
+    print "Muestras en: ${params.dataDir}"
+    Mapping(dataDir_ch,ref_data_ch)
+    MappingStats(Mapping.out.map{it[1]}.collect())
 }
 workflow prueba {    
 }
