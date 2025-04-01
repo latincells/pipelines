@@ -84,14 +84,16 @@ process CombinedFremuxletDemuxlet {
 
     script:
     """
-    bedtools merge -i ${vcf} | samtools view -@ 8 --write-index -L - -D CB:<(zcat ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz) -o filtered_bam.bam ${reads}/outs/possorted_genome_bam.bam
+    bedtools merge -i ${vcf} | samtools view -@ 8 --write-index -L - -D CB:<(zcat ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz) -o filtered_Demuxlet_bam.bam ${reads}/outs/possorted_genome_bam.bam &
+    bedtools merge -i /tmp/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf | samtools view -@ 8 --write-index -L - -D CB:<(zcat ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz) -o filtered_Freemuxlet_bam.bam ${reads}/outs/possorted_genome_bam.bam
     mkdir Pileup_files
-    popscle dsc-pileup --sam filtered_bam.bam --vcf ${vcf} --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --out Pileup_files/${sample_id}
+    popscle dsc-pileup --sam filtered_Freemuxlet_bam.bam --vcf/tmp/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --out Pileup_files/${sample_id}
+    rm filtered_Freemuxlet_bam.bam &
     popscle freemuxlet --plp Pileup_files/${sample_id} --out ${sample_id} --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --nsample ${params.NPlex}
     gunzip ${sample_id}.clust1.samples.gz
-    popscle demuxlet --plp Pileup_files/${sample_id} --vcf ${vcf} --out ${sample_id} --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --field GT
+    popscle demuxlet --sam filtered_Demuxlet_bam.bam --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --vcf ${vcf} --field GT --out ${sample_id} --alpha 0 --alpha 0.5
     (head -n 1 ${sample_id}.clust1.samples && tail -n +2 ${sample_id}.clust1.samples && tail -n +2 ${sample_id}.best) > ${sample_id}.CombinedDemultiplex.samples
-    rm filtered_bam.bam 
+    rm filtered_Demuxlet_bam.bam 
     """
 }
 process Demuxlet {
@@ -111,7 +113,7 @@ process Demuxlet {
     script:
     """
     mkdir Demuxlet_outs
-    popscle demuxlet --sam ${reads}/outs/possorted_genome_bam.bam --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --vcf ${vcf} --field GT --out ${sample_id}
+    popscle demuxlet --sam ${reads}/outs/possorted_genome_bam.bam --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --vcf ${vcf} --field GT --out ${sample_id} --alpha 0 --alpha 0.5
     mv ${sample_id}.best ${sample_id}.Demuxlet.best
     """
 }
@@ -477,7 +479,7 @@ process Seurat_QC_integration {
     datalist <- ScaleData(datalist, verbose = F) # ,features = all.genes
     datalist <- CellCycleScoring(datalist,s.features = cc.genes\$s.genes, g2m.features = cc.genes\$g2m.genes, set.ident = TRUE, search = TRUE)
     gc()
-    datalist <- ScaleData(datalist,vars.to.regress = c('percent.mt', 'S.Score', 'G2M.Score')) #, 'housekeeping1', 'ribo.percent1', 'nFeature_RNA', 'nCount_RNA',
+    datalist <- ScaleData(datalist,vars.to.regress = c('percent.mt')) #, 'housekeeping1', 'ribo.percent1', 'nFeature_RNA', 'nCount_RNA', 'S.Score', 'G2M.Score'
     datalist <- RunPCA(datalist, verbose = F)
 
     datalist <- SetIdent(datalist,value = "orig.ident")
@@ -517,7 +519,7 @@ process Seurat_QC_integration {
             datalist <- datalist %>% 
             RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, min.dist = 0.3, seed.use = 123, umap.method = "umap-learn", metric = "correlation") %>% 
             FindNeighbors(reduction = "harmony", dims = 1:Best_PC) %>% 
-            FindClusters(resolution = seq(0.2,2.6,0.2)) %>% 
+            FindClusters(resolution = seq(0.4,1.4,0.2)) %>% 
             identity()
             FeaturePlot(datalist,reduction = "umap",features="nCount_RNA",raster=FALSE) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/nCount_RNA.png"), width = 9, height = 9)
@@ -535,29 +537,21 @@ process Seurat_QC_integration {
         } else {
             datalist <- datalist %>% 
             FindNeighbors(reduction = "pca", dims = 1:Best_PC) %>% 
-            FindClusters(resolution = seq(0.2,2.6,0.2)) %>% 
+            FindClusters(resolution = seq(0.4,1.4,0.2)) %>% 
             identity()
             colnames(datalist@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist@meta.data))
         }
     } else {
         system("mkdir -p Analysis/Images/3-PosIntegration/")
         if ("${params.Batch}" != "orig.ident"){
-            if ("SNG.BEST.GUESS" %in% colnames(datalist@meta.data)){
-                datalist <- datalist %>% RunHarmony(c("${params.Batch}","orig.ident","SNG.BEST.GUESS"), plot_convergence = T, max_iter = 50)
-            } else {
-                datalist <- datalist %>% RunHarmony(c("${params.Batch}","orig.ident"), plot_convergence = T, max_iter = 50)
-            }
+            datalist <- datalist %>% RunHarmony(c("${params.Batch}","orig.ident"), plot_convergence = T, max_iter = 50)
         } else {
-            if ("SNG.BEST.GUESS" %in% colnames(datalist@meta.data)){
-                datalist <- datalist %>% RunHarmony(c("orig.ident","SNG.BEST.GUESS"), plot_convergence = T, max_iter = 50)
-            } else {
-                datalist <- datalist %>% RunHarmony("orig.ident", plot_convergence = T, max_iter = 50)
-            }
+            datalist <- datalist %>% RunHarmony("orig.ident", plot_convergence = T, max_iter = 50)
         }
         datalist <- datalist %>% 
         RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, min.dist = 0.3, seed.use = 123, umap.method = "umap-learn", metric = "correlation") %>% 
         FindNeighbors(reduction = "harmony", dims = 1:Best_PC) %>% 
-        FindClusters(resolution = seq(0.2,2.6,0.2)) %>% 
+        FindClusters(resolution = seq(0.4,1.4,0.2)) %>% 
         identity()
         colnames(datalist@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist@meta.data))
         ###################################################################################################################################################

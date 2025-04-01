@@ -21,6 +21,8 @@ RUN R -e 'devtools::install_github("immunogenomics/harmony",upgrade ="never")'
 RUN pip install umap-learn==0.5.3
 RUN R -e 'install.packages("NMF",repos="https://cran.dcc.uchile.cl")'
 RUN R -e 'devtools::install_github("jinworks/CellChat",upgrade ="never")'
+RUN R -e 'devtools::install_github("haotian-zhuang/findPC",upgrade ="never")'
+RUN R -e 'devtools::install_github("smorabit/hdWGCNA", ref="dev",upgrade ="never")'
 RUN R -e 'devtools::install_github("satijalab/seurat-data")'
 RUN rm /tmp/LatinCells.Hackaton.yml
 USER root
