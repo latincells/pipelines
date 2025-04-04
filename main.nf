@@ -28,8 +28,6 @@ process Cellranger {
 
     output:      
     tuple val(sample_id), path("Mapped_$sample_id")
-    path("${sample_id}.web_summary.html")
-    path("*matrix.h5")
 
     script:
     """
@@ -37,8 +35,6 @@ process Cellranger {
     mv Mapped_${sample_id}/outs/filtered_feature_bc_matrix.h5 Mapped_${sample_id}/outs/${sample_id}.filtered_feature_bc_matrix.h5
     mv Mapped_${sample_id}/outs/web_summary.html Mapped_${sample_id}/outs/${sample_id}.web_summary.html
     mv Mapped_${sample_id}/outs/raw_feature_bc_matrix.h5 Mapped_${sample_id}/outs/${sample_id}.raw_feature_bc_matrix.h5
-    mv Mapped_${sample_id}/outs/*matrix.h5 .
-    mv Mapped_${sample_id}/outs/${sample_id}.web_summary.html .
     """
 }
 process Freemuxlet {
@@ -446,20 +442,15 @@ process Seurat_QC_integration {
     datalist[["percent.mt"]] <- PercentageFeatureSet(datalist, pattern="^MT-")
     VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3,group.by = "${params.Batch}",raster=FALSE)
     ggsave(paste0("Analysis/Images/1-QC/Pre-QC.byBatch.png"), width = 16, height = 9)
-    datalist <- datalist %>% NormalizeData(verbose = FALSE) %>% subset(subset = nFeature_RNA > 200 & percent.mt < 10 & nCount_RNA > 850)
+    datalist <- datalist %>% NormalizeData(verbose = FALSE) %>% subset(subset = nFeature_RNA > 200 & percent.mt < 15)
     datalist <- datalist %>% AddModuleScore(features = list(hk), name = "housekeeping") %>% AddModuleScore(features = list(ribo), name = "ribo.percent")
     print("Splitting for QC per sample")
-    datalist <- SplitObject(datalist, split.by = "orig.ident")
-    contador = 0
-    Stats\$PostQC <- 0
-    for (elemento in datalist[1:length(datalist)]){
-        contador = contador + 1
-        print(paste0("QC en muestra N°: ",contador))
-        datalist[[contador]] <- elemento %>% NormalizeData(verbose = FALSE) %>% subset(subset = nCount_RNA < (median(nCount_RNA) + 5*mad(nCount_RNA)))
-        Stats[Stats\$RunID == unique(elemento@meta.data\$orig.ident),]\$PostQC <- ncol(datalist[[contador]])
-        gc()
-    }
-    datalist <- Reduce(merge, datalist) %>% JoinLayers()
+
+    PostQC <- as.data.frame(table(datalist@meta.data\$orig.ident))
+    colnames(PostQC) <- c("RunID","PostQC")
+    Stats <- merge(Stats,PostQC,by="RunID")
+    Stats <- Stats[Stats\$PostQC > 0,]
+
     if (any(colnames(datalist@meta.data) == "SNG.BEST.GUESS")){
         PostQC <- as.data.frame(table(datalist@meta.data\$orig.ident,datalist@meta.data\$SNG.BEST.GUESS))
         colnames(PostQC) <- c("RunID","SNG.BEST.GUESS","PostQC2")
@@ -1091,7 +1082,7 @@ workflow Mapping {
     main: 
         Cellranger(data,data2)
     emit: 
-        Cellranger.out[0]
+        Cellranger.out
 }
 workflow {
     if (params.help == true){
