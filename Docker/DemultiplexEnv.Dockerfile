@@ -4,7 +4,7 @@ LABEL image.author.name "Adolfo Rojas Hidalgo"
 LABEL image.author.email "adolfo.rojas@ug.uchile.cl"
 
 COPY --chown=$MAMBA_USER:$MAMBA_USER Demultiplex.yml /tmp/Demultiplex.yml
-COPY --chown=$MAMBA_USER:$MAMBA_USER GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf /tmp/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf
+COPY --chown=$MAMBA_USER:$MAMBA_USER GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf /opt/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf
 
 RUN micromamba --version
 

@@ -17,7 +17,6 @@ params.ModelsCelltypist = ""
 params.help = false
 process Cellranger {
     storeDir "${params.outdir}/1-Counts"
-    cpus 24
     maxForks 2
     tag "on $sample_id"
     errorStrategy 'ignore'
@@ -31,7 +30,7 @@ process Cellranger {
 
     script:
     """
-    cellranger count --id=Mapped_${sample_id} --fastqs=${reads} --sample=${sample_id} --transcriptome=${ref_data} --create-bam=true --localmem 90
+    cellranger count --id=Mapped_${sample_id} --fastqs=${reads} --sample=${sample_id} --transcriptome=${ref_data} --create-bam=true --localcores=${task.cpus}
     mv Mapped_${sample_id}/outs/filtered_feature_bc_matrix.h5 Mapped_${sample_id}/outs/${sample_id}.filtered_feature_bc_matrix.h5
     mv Mapped_${sample_id}/outs/web_summary.html Mapped_${sample_id}/outs/${sample_id}.web_summary.html
     mv Mapped_${sample_id}/outs/raw_feature_bc_matrix.h5 Mapped_${sample_id}/outs/${sample_id}.raw_feature_bc_matrix.h5
@@ -40,8 +39,6 @@ process Cellranger {
 process Freemuxlet {
     label 'Demultiplex'
     publishDir "${params.outdir}/Metadata", mode:'copy'  
-    cpus 20
-    memory 50.GB
     maxForks 2
     tag "on $sample_id"
     errorStrategy 'ignore'
@@ -54,9 +51,9 @@ process Freemuxlet {
 
     script:
     """
-    bedtools merge -i /tmp/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf | samtools view -@ 8 --write-index -L - -D CB:<(zcat ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz) -o filtered_bam.bam ${reads}/outs/possorted_genome_bam.bam
+    bedtools merge -i /opt/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf | samtools view -@ 8 --write-index -L - -D CB:<(zcat ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz) -o filtered_bam.bam ${reads}/outs/possorted_genome_bam.bam
     mkdir Pileup_files
-    popscle dsc-pileup --sam filtered_bam.bam --vcf /tmp/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --out Pileup_files/${sample_id}
+    popscle dsc-pileup --sam filtered_bam.bam --vcf /opt/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --out Pileup_files/${sample_id}
     mkdir Freemuxlet_outs
     popscle freemuxlet --plp Pileup_files/${sample_id} --out Freemuxlet_outs/${sample_id} --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --nsample ${params.NPlex}
     gunzip Freemuxlet_outs/${sample_id}.clust1.samples.gz
@@ -66,8 +63,6 @@ process Freemuxlet {
 process CombinedFremuxletDemuxlet {
     label 'Demultiplex'
     publishDir "${params.outdir}/Metadata", mode:'copy'  
-    cpus 20
-    memory 50.GB
     maxForks 2
     tag "on $sample_id"
     errorStrategy 'ignore'
@@ -80,12 +75,13 @@ process CombinedFremuxletDemuxlet {
 
     script:
     """
+    NPlex=\$(gunzip -c ${vcf} | grep -m 1 "^#CHROM" | awk '{print NF-9}')
     bedtools merge -i ${vcf} | samtools view -@ 8 --write-index -L - -D CB:<(zcat ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz) -o filtered_Demuxlet_bam.bam ${reads}/outs/possorted_genome_bam.bam &
-    bedtools merge -i /tmp/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf | samtools view -@ 8 --write-index -L - -D CB:<(zcat ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz) -o filtered_Freemuxlet_bam.bam ${reads}/outs/possorted_genome_bam.bam
+    bedtools merge -i /opt/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf | samtools view -@ 8 --write-index -L - -D CB:<(zcat ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz) -o filtered_Freemuxlet_bam.bam ${reads}/outs/possorted_genome_bam.bam
     mkdir Pileup_files
-    popscle dsc-pileup --sam filtered_Freemuxlet_bam.bam --vcf/tmp/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --out Pileup_files/${sample_id}
+    popscle dsc-pileup --sam filtered_Freemuxlet_bam.bam --vcf /opt/GRCh38_1000G_MAF0.05_ExonFiltered_ChrEncoding.sorted.vcf --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --out Pileup_files/${sample_id}
     rm filtered_Freemuxlet_bam.bam &
-    popscle freemuxlet --plp Pileup_files/${sample_id} --out ${sample_id} --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --nsample ${params.NPlex}
+    popscle freemuxlet --plp Pileup_files/${sample_id} --out ${sample_id} --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --nsample \$NPlex
     gunzip ${sample_id}.clust1.samples.gz
     popscle demuxlet --sam filtered_Demuxlet_bam.bam --group-list ${reads}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz --vcf ${vcf} --field GT --out ${sample_id} --alpha 0 --alpha 0.5
     (head -n 1 ${sample_id}.clust1.samples && tail -n +2 ${sample_id}.clust1.samples && tail -n +2 ${sample_id}.best) > ${sample_id}.CombinedDemultiplex.samples
@@ -95,8 +91,6 @@ process CombinedFremuxletDemuxlet {
 process Demuxlet {
     label 'Demultiplex'
     publishDir "${params.outdir}/Metadata", mode:'copy'  
-    cpus 10
-    memory 10.GB
     maxForks 2
     tag "on $sample_id"
     
@@ -115,8 +109,6 @@ process Demuxlet {
 }
 process MappingStats {
     publishDir "${params.outdir}/Metadata", mode:'copy'  
-    cpus 10
-    memory 2.GB
     
     input: 
     path(CellrangerOuts)
@@ -139,11 +131,8 @@ process MappingStats {
     write.table(DataFrame, "CellrangerRunsSummary.tsv", row.names = FALSE, quote = FALSE, sep = "\\t")
     """
 }
-process SoupX_scDblFinder { // Se necesita actualizar si es q la data no es de 10X, ya que el script de soupX esta simplificado y data de otro origen necesita la creacion de clusters 
-    //publishDir "${params.outdir}/2-SoupX_SCDblFinder", mode:'copy', pattern: "*${sample_id}*"
+process SoupX_scDblFinder {
     publishDir "${params.outdir}/2-SoupX_SCDblFinder", mode:'copy', pattern: '*png'
-    cpus 10
-    memory 20.GB
     maxForks 4
     tag "on $sample_id"
     errorStrategy 'ignore'
@@ -404,8 +393,6 @@ process Seurat_QC_integration {
     })
     colors <- clusterExperiment::bigPalette
     colors <- colors[colors!="black"]
-    assignInNamespace("is_conda_python", function(x){ return(FALSE) }, ns="reticulate")
-    reticulate::use_python("/opt/conda/envs/LatinCells/bin/python3")
     set.seed(123)
     hk <- c("C1orf43", "CHMP2A", "EMC7", "GPI", "PSMB2", "PSMB4", "RAB7A", "REEP5", "SNRPD3", "VCP", "VPS29")
     ribo <- c('RPLP0', 'RPLP1', 'RPLP2', 'RPL3', 'RPL3L', 'RPL4', 'RPL5', 'RPL6', 'RPL7', 'RPL7A', 'RPL7L1', 'RPL8', 'RPL9', 'RPL10', 'RPL10A', 'RPL11', 'RPL12', 'RPL13', 'RPL13A', 'RPL14', 'RPL15', 'RPL17', 'RPL18', 'RPL18A', 'RPL19', 'RPL21', 'RPL22', 'RPL22L1', 'RPL23', 'RPL23A', 'RPL24', 'RPL26', 'RPL26L1', 'RPL27', 'RPL27A', 'RPL28', 'RPL29', 'RPL30', 'RPL31', 'RPL32', 'RPL34', 'RPL35', 'RPL35A', 'RPL36', 'RPL36A', 'RPL36AL', 'RPL37', 'RPL37A', 'RPL38', 'RPL39', 'RPL39L', 'RPL41', 'RPSA', 'RPS2', 'RPS3', 'RPS3A', 'RPS4X', 'RPS4Y1', 'RPS5', 'RPS6', 'RPS7', 'RPS8', 'RPS9', 'RPS10', 'RPS11', 'RPS12', 'RPS13', 'RPS14', 'RPS15', 'RPS15A', 'RPS16', 'RPS17', 'RPS18', 'RPS19', 'RPS20', 'RPS21', 'RPS23', 'RPS24', 'RPS25', 'RPS26', 'RPS27', 'RPS27A', 'RPS28', 'RPS29')
@@ -479,7 +466,7 @@ process Seurat_QC_integration {
     Best_PC <- optimizePCA(datalist, 0.9) # 0.9 is % of variance explained by these PCs
     ElbowPlot(datalist, ndims = length(datalist@reductions\$pca), reduction = "pca") + geom_vline(xintercept=Best_PC, linetype = "dashed", color = "red")
     ggsave(paste0("Analysis/Images/1-QC/ElbowPlot.png"), width = 9, height = 9, bg="white")
-    datalist <- RunUMAP(datalist, reduction = "pca", dims = 1:Best_PC, verbose = F, min.dist = 0.3, seed.use = 123, umap.method = "umap-learn", metric = "correlation")
+    datalist <- RunUMAP(datalist, reduction = "pca", dims = 1:Best_PC, verbose = F, seed.use = 123)
     ###################################################################################################################################################
     if ("${params.Batch}" != "orig.ident"){
         DimPlot(datalist,reduction = "umap", group.by = "${params.Batch}", cols = colors,raster=FALSE) + seurat_theme()
@@ -508,7 +495,7 @@ process Seurat_QC_integration {
             system("mkdir -p Analysis/Images/3-PosIntegration/")
             datalist <- datalist %>% RunHarmony("SNG.BEST.GUESS", plot_convergence = T, max_iter = 50)
             datalist <- datalist %>% 
-            RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, min.dist = 0.3, seed.use = 123, umap.method = "umap-learn", metric = "correlation") %>% 
+            RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, seed.use = 123) %>% 
             FindNeighbors(reduction = "harmony", dims = 1:Best_PC) %>% 
             FindClusters(resolution = seq(0.4,1.4,0.2)) %>% 
             identity()
@@ -540,7 +527,7 @@ process Seurat_QC_integration {
             datalist <- datalist %>% RunHarmony("orig.ident", plot_convergence = T, max_iter = 50)
         }
         datalist <- datalist %>% 
-        RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, min.dist = 0.3, seed.use = 123, umap.method = "umap-learn", metric = "correlation") %>% 
+        RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, seed.use = 123) %>% 
         FindNeighbors(reduction = "harmony", dims = 1:Best_PC) %>% 
         FindClusters(resolution = seq(0.4,1.4,0.2)) %>% 
         identity()
@@ -629,7 +616,8 @@ process CellTypist {
 }
 process RunAzimuth {
     publishDir "${params.outdir}/5-Seurat-Cell_Annotation", mode:'copy'
-    
+    errorStrategy "ignore"
+
     input:
     path(Datalist)
 
@@ -788,7 +776,6 @@ process Seurat_Cell_Annotation {
 }
 process CellChat {
     publishDir "${params.outdir}/6-Cell_Communication", mode:'copy'
-    cpus 60
 
     input:
     path(Datalist)
@@ -1091,7 +1078,6 @@ workflow {
         print '\n\tAlternatives:\n\t\t--Project_Name = Sets a custom directory for the project.\n\t\t--Sample_metadata = File with metadata of samples, must be a Tabular delimited file (TSV|TAB), and must have a column calles "Sample" matching the names of raw data folders.\n\t\t--outdir = Name of directory to save outputs. (def. "LatinCells_Results/${params.Project_Name}/")\n\t\t--NPlex = Sets the number of samples per run in multiplexed libraries.\n\t\t-resume = Continue an analysis after the last well executed part of a workflow,\n\t\t\tbefore a error or a change made in thee code of a process.[Nextflow parameter].\n\t\t--help = Prints this help message.'
         print 'Output directory:\n\tBy default this workflow creates a directory called "LatinCells_Results/General/" in the working directory.'
     } else{   
-        // Channels definition
         dataDir_ch = channel.fromFilePairs(params.dataDir, type: 'dir', size: -1) 
         ref_data_ch = channel.fromPath(params.ref_data, type: 'dir') 
         out_dir = file(params.outdir)
@@ -1110,7 +1096,6 @@ workflow {
         }
 }
 workflow NoIntegration { 
-    // Channels definition
     dataDir_ch = channel.fromFilePairs(params.dataDir, type: 'dir', size: -1) 
     ref_data_ch = channel.fromPath(params.ref_data, type: 'dir') 
     out_dir = file(params.outdir)
@@ -1123,8 +1108,7 @@ workflow NoIntegration {
     SoupX_scDblFinder(Mapping.out,Demultiplex.out)
     ObjectCreation(SoupX_scDblFinder.out.clean_reads,Demultiplex.out)
 }
-workflow JustMapping { 
-    // Channels definition
+workflow JustMapping {
     dataDir_ch = channel.fromFilePairs(params.dataDir, type: 'dir', size: -1) 
     ref_data_ch = channel.fromPath(params.ref_data, type: 'dir') 
     out_dir = file(params.outdir)
@@ -1137,4 +1121,3 @@ workflow JustMapping {
 }
 workflow prueba {    
 }
-//nextflow /media/storage2/Adolfo2/LatinCells/LatinCells/main.nf --dataDir='/media/storage2/Adolfo2/LatinCells/workflow_test/RawData_test/*' -resume
