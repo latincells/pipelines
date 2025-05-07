@@ -644,7 +644,7 @@ process RunAzimuth {
     datalist <- RunAzimuth("${Datalist}", reference = "pbmcref")
 
     DimPlot(datalist, reduction = "ref.umap", group.by = c("seurat_clusters","predicted.celltype.l2"),label=T,repel=T,raster=FALSE, cols = colors) + seurat_theme()
-    ggsave("Azimuth.png",width = 9, height = 9)
+    ggsave("Azimuth.png",width = 21, height = 9)
     """
 }
 process Seurat_Cell_Annotation {
