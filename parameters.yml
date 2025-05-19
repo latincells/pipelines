@@ -1,16 +1,17 @@
 ## params:
-dataDir: "" # Ruta al directorio de datos crudos. | ejemplo: "/media/storage1/Adolfo/SingleCell/Data/RawData/Chile/03-CZI/02.RawData/*"
-ref_data: "" # Ruta a los datos de referencia. | ejemplo: "/media/storage2/software/refdata-gex-GRCh38-2024-A"
-Project_Name: "" # Nombre del proyecto. | ejemplo: "Chile_03"
+dataDir: "Data/RawData/Chile/03-CZI/02.RawData/*" # Ruta al directorio de datos crudos. | ejemplo: "/media/storage1/Adolfo/SingleCell/Data/RawData/Chile/03-CZI/02.RawData/*"
+ref_data: "Data/References/refdata-gex-GRCh38-2024-A" # Ruta a los datos de referencia. | ejemplo: "/media/storage2/software/refdata-gex-GRCh38-2024-A"
+Project_Name: "Tests" # Nombre del proyecto. | ejemplo: "Chile_03"
 MainOutdir: "LatinCells_Results" # Ruta al directorio de salida principal. | por defecto: "LatinCells_Results"
 # outdir resultante: "LatinCells_Results/Chile_03"
 
 Batch: "orig.ident" # Identificador de Batch en columna de metadata. | Para Seurat por defecto: "orig.ident"
 NPlex: "" # Campo para multiplexación, actualmente vacío. | ejemplo: "4"
-Sample_metadata: "" # Ruta al archivo de metadatos de las muestras, actualmente vacío. | ejemplo: "MetaData/metadata.tsv"
+Sample_metadata: "Data/MetaData/CL-UY.tsv" # Ruta al archivo de metadatos de las muestras, actualmente vacío. | ejemplo: "MetaData/metadata.tsv"
 Mouse: false # Indica si el análisis es para muestras de ratón, actualmente no disponible.
-FreemuxletFiles: "" # Ruta a los archivos Freemuxlet. | ejemplo: "MetaData/*.clust1.samples"
-
+Freemuxlet: true
+ModelsCelltypist: "Immune_All_Low.pkl, Immune_All_High.pkl" # Nombre de los modelos de Celltypist. Para varios separar por ","  | ejemplo: "Immune_All_Low.pkl, Immune_All_High.pkl, Healthy_Adult_Heart.pkl"
+VCF_Files: "Data/Genotypes/Chile-Uruguay/VCFs/*.vcf.gz"
 
 # Ejemplos de comando para ejecutar el pipeline de Nextflow.
 # 1- Usando este archivo con rutas relativas y ejemplos de valores para los parametros:
