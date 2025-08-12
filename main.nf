@@ -162,7 +162,7 @@ process SoupX_scDblFinder {
         theme(panel.background = element_rect(colour = "black", size=0.1), 
             plot.title = element_text(hjust = 0.5, angle = 0, size = 15, face = "bold", vjust = 1),
             axis.ticks.length=unit(.2, "cm"), axis.text = element_text(size=11), 
-            panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+            panel.grid.major = element_blank(), panel.grid.minor = element_blank(),legend.key = element_rect(colour = NA, fill = NA))
     }   
     sc = load10X("${reads}/outs/")
     StatsTable <- data.frame("RunID"="${sample_id}", "CellRanger" = ncol(sc\$toc))
@@ -412,7 +412,7 @@ process Seurat_QC_integration {
         theme(panel.background = element_rect(colour = "black", size=0.1), 
             plot.title = element_text(hjust = 0.5, angle = 0, size = 15, face = "bold", vjust = 1),
             axis.ticks.length=unit(.2, "cm"), axis.text = element_text(size=11), 
-            panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+            panel.grid.major = element_blank(), panel.grid.minor = element_blank(),legend.key = element_rect(colour = NA, fill = NA))
     }
     Stats <- list()
     for (CSV in list.files("./",pattern="*.csv")) {
@@ -622,6 +622,7 @@ process RunAzimuth {
     path(Datalist)
 
     output:    
+    path("Azimuth/")
     path("*.png")
 
     script:
@@ -639,12 +640,23 @@ process RunAzimuth {
             theme(panel.background = element_rect(colour = "black", size=0.1), 
                 plot.title = element_text(hjust = 0.5, angle = 0, size = 15, face = "bold", vjust = 1),
                 axis.ticks.length=unit(.2, "cm"), axis.text = element_text(size=11), 
-                panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+                panel.grid.major = element_blank(), panel.grid.minor = element_blank(),legend.key = element_rect(colour = NA, fill = NA))
         }
     datalist <- RunAzimuth("${Datalist}", reference = "pbmcref")
-
     DimPlot(datalist, reduction = "ref.umap", group.by = c("seurat_clusters","predicted.celltype.l2"),label=T,repel=T,raster=FALSE, cols = colors) + seurat_theme()
-    ggsave("Azimuth.png",width = 21, height = 9)
+    ggsave("Azimuth.png",width = 24, height = 9)
+
+    AzimuthAnnotation <- as.data.frame(datalist@meta.data[(grepl("predicted.celltype.l",colnames(datalist@meta.data))) & !(grepl("score",colnames(datalist@meta.data)))])
+    rm(datalist)
+    gc()
+    Sobj <- readRDS("${Datalist}")
+    Sobj <- AddMetaData(Sobj, AzimuthAnnotation)
+    system("mkdir -p Azimuth")
+    for (Annotation in names(Sobj@meta.data)[grepl("predicted.celltype.",names(Sobj@meta.data))]){
+        print(Annotation)
+        DimPlot(Sobj,reduction = "umap", group.by = Annotation, cols = colors,raster=FALSE) + seurat_theme()
+        ggsave(paste0("Azimuth/Azimuth.",Annotation,".png"),width = 9, height = 9)
+    }
     """
 }
 process Seurat_Cell_Annotation {
@@ -696,7 +708,7 @@ process Seurat_Cell_Annotation {
             theme(panel.background = element_rect(colour = "black", size=0.1), 
                 plot.title = element_text(hjust = 0.5, angle = 0, size = 15, face = "bold", vjust = 1),
                 axis.ticks.length=unit(.2, "cm"), axis.text = element_text(size=11), 
-                panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+                panel.grid.major = element_blank(), panel.grid.minor = element_blank(),legend.key = element_rect(colour = NA, fill = NA))
     }
     ppSingleR <- function(sobj, cluster){
     sce <- as.SingleCellExperiment(sobj)
@@ -901,7 +913,7 @@ process Seurat_create_object_mouse {
         theme(panel.background = element_rect(colour = "black", size=0.1), 
             plot.title = element_text(hjust = 0.5, angle = 0, size = 15, face = "bold", vjust = 1),
             axis.ticks.length=unit(.2, "cm"), axis.text = element_text(size=11), 
-            panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+            panel.grid.major = element_blank(), panel.grid.minor = element_blank(),legend.key = element_rect(colour = NA, fill = NA))
     }
 
     ppSeurat <- function(sobj, res){
@@ -1104,6 +1116,7 @@ workflow NoIntegration {
     print "Directorio de Salida: ${params.outdir}"
     print "Muestras en: ${params.dataDir}"
     Mapping(dataDir_ch,ref_data_ch)
+    MappingStats(Mapping.out.map{it[1]}.collect())
     Demultiplex(Mapping.out)
     SoupX_scDblFinder(Mapping.out,Demultiplex.out)
     ObjectCreation(SoupX_scDblFinder.out.clean_reads,Demultiplex.out)
