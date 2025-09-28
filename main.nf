@@ -652,6 +652,7 @@ process RunAzimuth {
     Sobj <- readRDS("${Datalist}")
     Sobj <- AddMetaData(Sobj, AzimuthAnnotation)
     system("mkdir -p Azimuth")
+    write.table(AzimuthAnnotation, file = "Azimuth/Azimuth_annotation.tsv", row.names = T, quote = F, col.names = T, sep = "\\t")
     for (Annotation in names(Sobj@meta.data)[grepl("predicted.celltype.",names(Sobj@meta.data))]){
         print(Annotation)
         DimPlot(Sobj,reduction = "umap", group.by = Annotation, cols = colors,raster=FALSE) + seurat_theme()
