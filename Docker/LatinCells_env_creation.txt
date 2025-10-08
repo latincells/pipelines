@@ -3,7 +3,7 @@ micromamba activate LatinCells
 micromamba config append channels bioconda
 micromamba config append channels dnachun
 micromamba config append channels conda-forge
-micromamba install -c conda-forge r-seurat -y # 5.0.1
+micromamba install -c conda-forge r-seurat -y # 5.2.1 Installs v5.3.0 but I manually changed to v5.2.1 in YML due to a bug with SCTransform-Azimuth
 micromamba install -c bioconda bioconductor-scdblfinder -y # 1.16.0
 micromamba install -c conda-forge r-soupx -y  # 1.6.2 
 micromamba install -c bioconda bioconductor-dropletutils -y # 1.22.0

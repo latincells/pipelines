@@ -566,7 +566,7 @@ dependencies:
   - r-sctransform=0.4.2=r44h3704496_1
   - r-selectr=0.4_2=r44hc72bb7e_5
   - r-sessioninfo=1.2.3=r44hc72bb7e_1
-  - r-seurat=5.3.0=r44h3697838_1
+  - r-seurat=5.2.1=r44h93ab643_0
   - r-seurat-data=0.2.2.9002=r44hdfd78af_0
   - r-seurat-disk=0.0.0.9021=r44hdfd78af_2
   - r-seuratobject=5.2.0=r44h3697838_1
