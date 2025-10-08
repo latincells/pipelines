@@ -281,6 +281,7 @@ process SoupX_scDblFinder {
     """
 }
 process Seurat_Object_creation {
+    label 'BigMem'
     publishDir "${params.outdir}/3-Seurat-Object", mode:'copy'
 
     input:
@@ -289,19 +290,28 @@ process Seurat_Object_creation {
     file(metadata)
 
     output:       
-    path("datalist.rds"), emit: rds 
+    tuple path("${params.Project_Name}.rds"), path("${params.Project_Name}.BPCells_counts/"), emit: rds
 
     script:
     """
     #!/usr/bin/env Rscript
+    suppressPackageStartupMessages({
     library(Seurat)
     library(dplyr)
-    set.seed(123)   
+    library(BPCells)
+    library(future)
+    library(future.apply)
+    })
+    options(future.globals.maxSize = 4 * 1024^3)  # 4 GiB
+    plan("multisession", workers = ${task.cpus})
+    set.seed(123)
+    hk <- c("C1orf43", "CHMP2A", "EMC7", "GPI", "PSMB2", "PSMB4", "RAB7A", "REEP5", "SNRPD3", "VCP", "VPS29")
+    ribo <- c('RPLP0', 'RPLP1', 'RPLP2', 'RPL3', 'RPL3L', 'RPL4', 'RPL5', 'RPL6', 'RPL7', 'RPL7A', 'RPL7L1', 'RPL8', 'RPL9', 'RPL10', 'RPL10A', 'RPL11', 'RPL12', 'RPL13', 'RPL13A', 'RPL14', 'RPL15', 'RPL17', 'RPL18', 'RPL18A', 'RPL19', 'RPL21', 'RPL22', 'RPL22L1', 'RPL23', 'RPL23A', 'RPL24', 'RPL26', 'RPL26L1', 'RPL27', 'RPL27A', 'RPL28', 'RPL29', 'RPL30', 'RPL31', 'RPL32', 'RPL34', 'RPL35', 'RPL35A', 'RPL36', 'RPL36A', 'RPL36AL', 'RPL37', 'RPL37A', 'RPL38', 'RPL39', 'RPL39L', 'RPL41', 'RPSA', 'RPS2', 'RPS3', 'RPS3A', 'RPS4X', 'RPS4Y1', 'RPS5', 'RPS6', 'RPS7', 'RPS8', 'RPS9', 'RPS10', 'RPS11', 'RPS12', 'RPS13', 'RPS14', 'RPS15', 'RPS15A', 'RPS16', 'RPS17', 'RPS18', 'RPS19', 'RPS20', 'RPS21', 'RPS23', 'RPS24', 'RPS25', 'RPS26', 'RPS27', 'RPS27A', 'RPS28', 'RPS29')   
     fnames <- basename(list.dirs('./', recursive = F))
     files <- file.path(fnames)
 
     meta <- data.frame()
-    datalist <- list()
+    datalist <- NULL
     if ("${params.Sample_metadata}" != ""){
         if(grepl(".tsv","${params.Sample_metadata}")){
         meta <- read.delim(basename("${params.Sample_metadata}"),sep="\\t")}
@@ -311,10 +321,12 @@ process Seurat_Object_creation {
         meta <- read.delim(basename("${params.Sample_metadata}"),sep=",")}
         }
 
-    Multiplex <- "No"
-
-    for (i in 1:length(files)) {
-        datalist[[i]] <- CreateSeuratObject(counts = Read10X(files[i]), project = fnames[i], min.cells = 3, min.features = 200)  
+    #for (i in 1:length(files)) {
+    process_file <- function(i) {
+       Multiplex <- "No"
+       Loop_scObject <- CreateSeuratObject(counts = Read10X(files[i]), project = fnames[i], min.cells = 3, min.features = 200)
+       write_matrix_dir(mat =Loop_scObject[["RNA"]]\$counts, dir = paste0(files[i],"_BPCells.counts"))
+       Loop_scObject[["RNA"]]\$counts <- open_matrix_dir(dir = paste0(files[i],"_BPCells.counts"))
         if (file.exists(paste0(files[i],".Freemuxlet.samples")) | file.exists(paste0(files[i],".Demuxlet.best"))){
             if (file.exists(paste0(files[i],".Freemuxlet.samples"))){
                 MultiPlexData <- read.delim(paste0(files[i],".Freemuxlet.samples"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
@@ -326,7 +338,7 @@ process Seurat_Object_creation {
             }
             rownames(MultiPlexData) <- MultiPlexData\$BARCODE
             MultiPlexData\$BARCODE <- NULL
-            datalist[[i]] <- AddMetaData(datalist[[i]], metadata = MultiPlexData)
+           Loop_scObject <- AddMetaData(Loop_scObject, metadata = MultiPlexData)
             Multiplex <- "Si"
         }
         if (file.exists(paste0(files[i],".CombinedDemultiplex.samples"))){
@@ -347,38 +359,71 @@ process Seurat_Object_creation {
                 }
                 rownames(MultiPlexData) <- MultiPlexData\$BARCODE
                 MultiPlexData\$BARCODE <- NULL
-                datalist[[i]] <- AddMetaData(datalist[[i]], metadata = MultiPlexData)
+               Loop_scObject <- AddMetaData(Loop_scObject, metadata = MultiPlexData)
                 Multiplex <- "Si"
         }
         if (Multiplex == "No"){
             if ("${params.Sample_metadata}" != ""){
                 for (k in colnames(meta)){
-                    datalist[[i]] <- AddMetaData(datalist[[i]], metadata = meta[meta\$Sample == fnames[i],][[k]], col.name = k)
+                   Loop_scObject <- AddMetaData(Loop_scObject, metadata = meta[meta\$Sample == fnames[i],][[k]], col.name = k)
                 }
             }
         }
-        print(paste(i, 'out', length(files)))}
-    datalist <- Reduce(merge, datalist)
-    if (file.exists(paste0(files[i],".Freemuxlet.samples"))){
+        #if (i ==1) {
+        #    datalist <- Loop_scObject
+        #} else {
+        #    datalist <- merge(datalist, y = Loop_scObject)
+        #}
+        #rm(Loop_scObject)
+        gc()
+        #print(paste(i, 'out', length(files)))}
+        Loop_scObject_processed <- Loop_scObject
+        Loop_scObject_processed[["percent.mt"]] <- PercentageFeatureSet(Loop_scObject_processed, pattern="^MT-")
+        Loop_scObject_processed <- Loop_scObject_processed %>%
+                                NormalizeData(verbose = FALSE) %>%
+                                AddModuleScore(features = list(hk), name = "housekeeping") %>%
+                                AddModuleScore(features = list(ribo), name = "ribo.percent") %>%
+                                CellCycleScoring(s.features = cc.genes\$s.genes,
+                                                g2m.features = cc.genes\$g2m.genes,
+                                                set.ident = TRUE, search = TRUE)
+        Loop_scMetadata <- Loop_scObject_processed@meta.data %>%
+                            dplyr::select(percent.mt, housekeeping1, ribo.percent1, S.Score, G2M.Score, Phase)
+        rm(Loop_scObject_processed)
+        Loop_scObject <- AddMetaData(Loop_scObject, metadata = Loop_scMetadata)
+        return(Loop_scObject)
+    }
+
+    datalist_list <- future_lapply(1:length(files), process_file, future.seed = TRUE)
+    #datalist <- Reduce(merge, datalist)
+    datalist <- Reduce(function(x, y) merge(x, y = y), datalist_list)
+    rm(datalist_list)
+    gc()
+    datalist <- JoinLayers(datalist)
+    gc()
+    write_matrix_dir(mat = datalist[["RNA"]]\$counts, dir = "${params.Project_Name}.BPCells_counts")
+    datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${params.Project_Name}.BPCells_counts")
+
+    if (any(grepl(".Freemuxlet.samples", list.files(), fixed = TRUE))) {
         best_guess_factor <- factor(datalist@meta.data\$SNG.BEST.GUESS)
         best_guess_numbers <- as.numeric(best_guess_factor)
         datalist@meta.data\$SNG.BEST.GUESS <- LETTERS[best_guess_numbers]
-        datalist@meta.data\$SNG.BEST.GUESS <- paste0(datalist@meta.data\$orig.ident,"-",datalist@meta.data\$SNG.BEST.GUESS)
+        datalist@meta.data\$SNG.BEST.GUESS <- paste0(datalist@meta.data\$orig.ident, "-", datalist@meta.data\$SNG.BEST.GUESS)
     }
-    saveRDS(datalist, 'datalist.rds')
+    saveRDS(datalist, '${params.Project_Name}.rds')
     """
 }
 process Seurat_QC_integration {
+    label 'BigMem'
     publishDir "${params.outdir}/4-Seurat_QC-Integration", mode:'copy'
     
     input:
-    path(Datalist)
+    tuple path(Datalist), path(Counts)
     path(Stats)
 
     output:    
-    path("datalist.postQC-int*.rds"), emit: rds
+    tuple path("${params.Project_Name}.PostQC-Int.rds"), path(Counts), emit: rds
     path("Analysis/") 
-    path("StatsTable.csv"), emit: Stats
+    path("StatsTable.tsv"), emit: Stats
     path("DataForCelltypist/"), emit: DataForCelltypist, optional: true
 
     script:
@@ -387,15 +432,16 @@ process Seurat_QC_integration {
     suppressPackageStartupMessages({
     library(Seurat)
     library(preprocessCore)
+    library(BPCells)
     library(dplyr)
     library(ggplot2) 
     library(harmony)
     })
+    options(future.globals.maxSize = 30 * 1024^3)  # 30 GiB
+    plan("multisession", workers = ${task.cpus})
     colors <- clusterExperiment::bigPalette
     colors <- colors[colors!="black"]
     set.seed(123)
-    hk <- c("C1orf43", "CHMP2A", "EMC7", "GPI", "PSMB2", "PSMB4", "RAB7A", "REEP5", "SNRPD3", "VCP", "VPS29")
-    ribo <- c('RPLP0', 'RPLP1', 'RPLP2', 'RPL3', 'RPL3L', 'RPL4', 'RPL5', 'RPL6', 'RPL7', 'RPL7A', 'RPL7L1', 'RPL8', 'RPL9', 'RPL10', 'RPL10A', 'RPL11', 'RPL12', 'RPL13', 'RPL13A', 'RPL14', 'RPL15', 'RPL17', 'RPL18', 'RPL18A', 'RPL19', 'RPL21', 'RPL22', 'RPL22L1', 'RPL23', 'RPL23A', 'RPL24', 'RPL26', 'RPL26L1', 'RPL27', 'RPL27A', 'RPL28', 'RPL29', 'RPL30', 'RPL31', 'RPL32', 'RPL34', 'RPL35', 'RPL35A', 'RPL36', 'RPL36A', 'RPL36AL', 'RPL37', 'RPL37A', 'RPL38', 'RPL39', 'RPL39L', 'RPL41', 'RPSA', 'RPS2', 'RPS3', 'RPS3A', 'RPS4X', 'RPS4Y1', 'RPS5', 'RPS6', 'RPS7', 'RPS8', 'RPS9', 'RPS10', 'RPS11', 'RPS12', 'RPS13', 'RPS14', 'RPS15', 'RPS15A', 'RPS16', 'RPS17', 'RPS18', 'RPS19', 'RPS20', 'RPS21', 'RPS23', 'RPS24', 'RPS25', 'RPS26', 'RPS27', 'RPS27A', 'RPS28', 'RPS29')
     optimizePCA <- function(sobj, csum){
     dp <- Stdev(sobj)^2
     for (z in 1:length(dp)) {
@@ -425,13 +471,33 @@ process Seurat_QC_integration {
     system("mkdir -p Analysis/Images/")
     system("mkdir -p Analysis/Images/1-QC/")
     system("mkdir -p Analysis/Images/2-PreIntegration/")
-    datalist <- readRDS("${Datalist}") %>% JoinLayers()
-    datalist[["percent.mt"]] <- PercentageFeatureSet(datalist, pattern="^MT-")
-    VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3,group.by = "${params.Batch}",raster=FALSE)
-    ggsave(paste0("Analysis/Images/1-QC/Pre-QC.byBatch.png"), width = 16, height = 9)
-    datalist <- datalist %>% NormalizeData(verbose = FALSE) %>% subset(subset = nFeature_RNA > 200 & percent.mt < 15)
-    datalist <- datalist %>% AddModuleScore(features = list(hk), name = "housekeeping") %>% AddModuleScore(features = list(ribo), name = "ribo.percent")
-    print("Splitting for QC per sample")
+    datalist <- readRDS("${Datalist}")
+    datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
+    NLibs <- length(unique(datalist@meta.data\$orig.ident))
+    if (NLibs <= 25) {
+        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "${params.Batch}",raster = F)
+        ggsave(paste0("Analysis/Images/1-QC/Pre-QC.byBatch.png"), width = 8, height = 18)
+        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "orig.ident", pt.size = F)
+        ggsave(paste0("Analysis/Images/1-QC/Pre-QC.byBatch.V2.png"), width = 8, height = 18)
+    } else {
+        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "${params.Batch}",raster = F)
+        ggsave(paste0("Analysis/Images/1-QC/Pre-QC.byBatch.png"), width = (8/25)*NLibs, height = 18, limitsize = F)
+        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "orig.ident", pt.size = F)
+        ggsave(paste0("Analysis/Images/1-QC/Pre-QC.byBatch.V2.png"), width = (8/25)*NLibs, height = 18, limitsize = F)
+    }
+    Sample.qc <- FetchData(datalist, vars=c("nFeature_RNA","nCount_RNA","percent.mt"))
+    Sample.qc %>% mutate(keep = if_else(nCount_RNA > 500 & nFeature_RNA > 200 & percent.mt < 15, "Keep", "Remove")) %>%
+        ggplot() + 
+        geom_point(aes(nCount_RNA, nFeature_RNA, colour=keep), alpha=.50) +
+        geom_vline(xintercept = 500, color="red") + 
+        geom_hline(yintercept = 200, color="red") +
+        scale_x_log10() + 
+        scale_y_log10() + 
+        seurat_theme() +
+        labs(colour = "Cell Status")
+    ggsave(paste0("Analysis/Images/1-QC/Pre-QC.FilterCells.png"), width = 16, height = 9)
+    rm(Sample.qc)
+    datalist <- datalist %>% NormalizeData(verbose = F) %>% subset(subset = nCount_RNA > 500 & nFeature_RNA > 200 & percent.mt < 15)
 
     PostQC <- as.data.frame(table(datalist@meta.data\$orig.ident))
     colnames(PostQC) <- c("RunID","PostQC")
@@ -444,48 +510,59 @@ process Seurat_QC_integration {
         Stats <- merge(Stats,PostQC,by="RunID")
         Stats <- Stats[Stats\$PostQC2 > 0,]
     } 
-    write.csv(Stats, "StatsTable.csv", row.names = F)
+    write.table(Stats, "StatsTable.tsv", row.names = F, quote = F, sep = "\\t")
     gc()
     datalist <- NormalizeData(datalist, verbose = F)
-    VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3,group.by = "${params.Batch}",raster=FALSE)
-    ggsave(paste0("Analysis/Images/1-QC/QC.byBatch.png"), width = 16, height = 9)
+    if (NLibs <= 25) {
+        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "${params.Batch}",raster = F)
+        ggsave(paste0("Analysis/Images/1-QC/QC.byBatch.png"), width = 8, height = 18)
+        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "orig.ident", pt.size = F)
+        ggsave(paste0("Analysis/Images/1-QC/QC.byBatch.V2.png"), width = 8, height = 18)
+    } else {
+        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "${params.Batch}",raster = F)
+        ggsave(paste0("Analysis/Images/1-QC/QC.byBatch.png"), width = (8/25)*NLibs, height = 18, limitsize = F)
+        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "orig.ident", pt.size = F)
+        ggsave(paste0("Analysis/Images/1-QC/QC.byBatch.V2.png"), width = (8/25)*NLibs, height = 18, limitsize = F)
+    }
     ###################################################################################################################################################
     datalist <- FindVariableFeatures(datalist, selection.method = "vst", nfeatures = 2000, verbose = F)
     LabelPoints(plot=VariableFeaturePlot(datalist), points = head(VariableFeatures(datalist), 15), repel=T, xnudge=0, ynudge=0) + theme(legend.position="none") + seurat_theme()
     ggsave(paste0("Analysis/Images/1-QC/VariableFeatures.png"), width = 9, height = 9)
     #all.genes <- rownames(datalist)
     datalist <- ScaleData(datalist, verbose = F) # ,features = all.genes
-    datalist <- CellCycleScoring(datalist,s.features = cc.genes\$s.genes, g2m.features = cc.genes\$g2m.genes, set.ident = TRUE, search = TRUE)
     gc()
     datalist <- ScaleData(datalist,vars.to.regress = c('percent.mt')) #, 'housekeeping1', 'ribo.percent1', 'nFeature_RNA', 'nCount_RNA', 'S.Score', 'G2M.Score'
     datalist <- RunPCA(datalist, verbose = F)
 
     datalist <- SetIdent(datalist,value = "orig.ident")
-    DimPlot(datalist, reduction = "pca",raster=FALSE)
+    DimPlot(datalist, reduction = "pca",raster = F)
     ggsave(paste0("Analysis/Images/1-QC/PCA.png"), width = 9, height = 9)
     Best_PC <- optimizePCA(datalist, 0.9) # 0.9 is % of variance explained by these PCs
     ElbowPlot(datalist, ndims = length(datalist@reductions\$pca), reduction = "pca") + geom_vline(xintercept=Best_PC, linetype = "dashed", color = "red")
     ggsave(paste0("Analysis/Images/1-QC/ElbowPlot.png"), width = 9, height = 9, bg="white")
-    datalist <- RunUMAP(datalist, reduction = "pca", dims = 1:Best_PC, verbose = F, seed.use = 123)
+    datalist <- RunUMAP(datalist, reduction = "pca", dims = 1:Best_PC, verbose = F, seed.use = 123, reduction.name = "PreInt_UMAP")
     ###################################################################################################################################################
     if ("${params.Batch}" != "orig.ident"){
-        DimPlot(datalist,reduction = "umap", group.by = "${params.Batch}", cols = colors,raster=FALSE) + seurat_theme()
+        DimPlot(datalist,reduction = "PreInt_UMAP", group.by = "${params.Batch}", cols = colors, raster = F) + seurat_theme()
         ggsave(paste0("Analysis/Images/2-PreIntegration/Batch.png"), width = 9, height = 9)
     } else {
-        DimPlot(datalist,reduction = "umap", group.by = "orig.ident", cols = colors,raster=FALSE) + seurat_theme()
+        if (length(unique(datalist@meta.data\$orig.ident)) <= length(colors)){
+            DimPlot(datalist,reduction = "PreInt_UMAP", group.by = "orig.ident", cols = colors, raster = F) + seurat_theme()
+        } else {
+            DimPlot(datalist,reduction = "PreInt_UMAP", group.by = "orig.ident", raster = F) + seurat_theme()}
         ggsave(paste0("Analysis/Images/2-PreIntegration/Orig.ident.png"), width = 9, height = 9)
     }
-    DimPlot(datalist, group.by = 'Phase', reduction = 'umap',raster=FALSE) + seurat_theme()
+    DimPlot(datalist, group.by = 'Phase', reduction = 'PreInt_UMAP',raster = F) + seurat_theme()
     ggsave("Analysis/Images/2-PreIntegration/Phase.png", width = 9, height = 9)
-    datalist %>% FeaturePlot(reduction = "umap",features="nCount_RNA",raster=FALSE) + seurat_theme()
+    datalist %>% FeaturePlot(reduction = "PreInt_UMAP",features="nCount_RNA",raster = F) + seurat_theme()
     ggsave(paste0("Analysis/Images/2-PreIntegration/nCount_RNA.png"), width = 9, height = 9)
-    datalist %>% FeaturePlot(reduction = "umap",features="ribo.percent1",raster=FALSE) + seurat_theme()
+    datalist %>% FeaturePlot(reduction = "PreInt_UMAP",features="ribo.percent1",raster = F) + seurat_theme()
     ggsave(paste0("Analysis/Images/2-PreIntegration/Ribo.percent1.png"), width = 9, height = 9)
-    datalist %>% FeaturePlot(reduction = "umap",features="percent.mt",raster=FALSE) + seurat_theme()
+    datalist %>% FeaturePlot(reduction = "PreInt_UMAP",features="percent.mt",raster = F) + seurat_theme()
     ggsave(paste0("Analysis/Images/2-PreIntegration/Percent.mt.png"), width = 9, height = 9)
     if (any(colnames(datalist@meta.data) == "SNG.BEST.GUESS")){
         if (length(unique(datalist@meta.data\$SNG.BEST.GUESS)) <= length(colors)){
-            DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
+            DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'PreInt_UMAP', cols = colors, raster = F) + seurat_theme()
             ggsave(paste0("Analysis/Images/2-PreIntegration/Demultiplex.png"), width = 9, height = 9)
         }
     }
@@ -497,25 +574,25 @@ process Seurat_QC_integration {
             datalist <- datalist %>% 
             RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, seed.use = 123) %>% 
             FindNeighbors(reduction = "harmony", dims = 1:Best_PC) %>% 
-            FindClusters(resolution = seq(0.4,1.4,0.2)) %>% 
+            FindClusters(resolution = seq(0.4,1.2,0.2)) %>% 
             identity()
-            FeaturePlot(datalist,reduction = "umap",features="nCount_RNA",raster=FALSE) + seurat_theme()
+            FeaturePlot(datalist,reduction = "umap",features="nCount_RNA",raster = F) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/nCount_RNA.png"), width = 9, height = 9)
-            FeaturePlot(datalist, reduction = "umap",features="ribo.percent1",raster=FALSE) + seurat_theme()
+            FeaturePlot(datalist, reduction = "umap",features="ribo.percent1",raster = F) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/Ribo.percent1.png"), width = 9, height = 9)
-            DimPlot(datalist, group.by = 'Phase', reduction = 'umap',raster=FALSE) + seurat_theme()
+            DimPlot(datalist, group.by = 'Phase', reduction = 'umap',raster = F) + seurat_theme()
             ggsave("Analysis/Images/3-PosIntegration/Phase.png", width = 9, height = 9)
-            datalist %>% FeaturePlot(reduction = "umap",features="percent.mt",raster=FALSE) + seurat_theme()
+            datalist %>% FeaturePlot(reduction = "umap",features="percent.mt",raster = F) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/Percent.mt.png"), width = 9, height = 9)
             if (length(unique(datalist@meta.data\$SNG.BEST.GUESS)) <= length(colors)){
-                DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
+                DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors, raster = F) + seurat_theme()
                 ggsave(paste0("Analysis/Images/3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
             }
             colnames(datalist@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist@meta.data))
         } else {
             datalist <- datalist %>% 
             FindNeighbors(reduction = "pca", dims = 1:Best_PC) %>% 
-            FindClusters(resolution = seq(0.4,1.4,0.2)) %>% 
+            FindClusters(resolution = seq(0.4,1.2,0.2)) %>% 
             identity()
             colnames(datalist@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist@meta.data))
         }
@@ -529,36 +606,40 @@ process Seurat_QC_integration {
         datalist <- datalist %>% 
         RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, seed.use = 123) %>% 
         FindNeighbors(reduction = "harmony", dims = 1:Best_PC) %>% 
-        FindClusters(resolution = seq(0.4,1.4,0.2)) %>% 
+        FindClusters(resolution = seq(0.4,1.2,0.2)) %>% 
         identity()
         colnames(datalist@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist@meta.data))
         ###################################################################################################################################################
         if ("${params.Batch}" != "orig.ident"){
-            DimPlot(datalist,reduction = "umap", group.by = "${params.Batch}", cols = colors,raster=FALSE) + seurat_theme()
+            DimPlot(datalist,reduction = "umap", group.by = "${params.Batch}", cols = colors, raster = F) + seurat_theme()
             ggsave(paste0("Analysis/Images/3-PosIntegration/Batch.png"), width = 9, height = 9)
         } else {
-            DimPlot(datalist,reduction = "umap", group.by = "orig.ident", cols = colors,raster=FALSE) + seurat_theme()
+            if (length(unique(datalist@meta.data\$orig.ident)) <= length(colors)){
+                DimPlot(datalist,reduction = "umap", group.by = "orig.ident", cols = colors, raster = F) + seurat_theme()
+            } else {DimPlot(datalist,reduction = "umap", group.by = "orig.ident", raster = F) + seurat_theme()}
             ggsave(paste0("Analysis/Images/3-PosIntegration/Orig.ident.png"), width = 9, height = 9)
         }
-        FeaturePlot(datalist,reduction = "umap",features="nCount_RNA",raster=FALSE) + seurat_theme()
+        FeaturePlot(datalist,reduction = "umap",features="nCount_RNA",raster = F) + seurat_theme()
         ggsave(paste0("Analysis/Images/3-PosIntegration/nCount_RNA.png"), width = 9, height = 9)
-        FeaturePlot(datalist, reduction = "umap",features="ribo.percent1",raster=FALSE) + seurat_theme()
+        FeaturePlot(datalist, reduction = "umap",features="ribo.percent1",raster = F) + seurat_theme()
         ggsave(paste0("Analysis/Images/3-PosIntegration/Ribo.percent1.png"), width = 9, height = 9)
-        DimPlot(datalist, group.by = 'Phase', reduction = 'umap',raster=FALSE) + seurat_theme()
+        DimPlot(datalist, group.by = 'Phase', reduction = 'umap',raster = F) + seurat_theme()
         ggsave("Analysis/Images/3-PosIntegration/Phase.png", width = 9, height = 9)
-        datalist %>% FeaturePlot(reduction = "umap",features="percent.mt",raster=FALSE) + seurat_theme()
+        datalist %>% FeaturePlot(reduction = "umap",features="percent.mt",raster = F) + seurat_theme()
         ggsave(paste0("Analysis/Images/3-PosIntegration/Percent.mt.png"), width = 9, height = 9)
         if (any(colnames(datalist@meta.data) == "SNG.BEST.GUESS")){
             if (length(unique(datalist@meta.data\$SNG.BEST.GUESS)) <= length(colors)){
-                DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors,raster=FALSE) + seurat_theme()
+                DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors, raster = F) + seurat_theme()
                 ggsave(paste0("Analysis/Images/3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
             }
         }
     }
-    saveRDS(datalist, 'datalist.postQC-int.rds')
+    saveRDS(datalist, '${params.Project_Name}.PostQC-Int.rds')
     if ("${params.ModelsCelltypist}" != ""){
-        datalist_sce <- as.SingleCellExperiment(datalist)
-        DropletUtils:::write10xCounts(x = datalist_sce@assays@data\$counts, path = paste0("DataForCelltypist"),overwrite = TRUE)
+        library(Matrix)
+        gc()
+        DropletUtils:::write10xCounts(x = Matrix(as.matrix(GetAssayData(datalist, layer = "counts")), sparse = T), path = paste0("DataForCelltypist"), overwrite = T)
+        gc()
         write.table(datalist@meta.data,file = paste0("DataForCelltypist/Metadata.csv"), row.names = T, quote = F, col.names = T, sep = "\\t")
         write.table(datalist@reductions\$umap@cell.embeddings,file = paste0("DataForCelltypist/Cell.embeddings.UMAP.csv"), row.names = T, quote = F, col.names = T, sep = "\\t")
         write.table(datalist@reductions\$harmony@cell.embeddings,file = paste0("DataForCelltypist/Cell.embeddings.PCA.csv"), row.names = T, quote = F, col.names = T, sep = "\\t")
@@ -567,6 +648,8 @@ process Seurat_QC_integration {
 }
 process CellTypist {
     publishDir "${params.outdir}/5-Seurat-Cell_Annotation", mode:'copy'
+    errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); return 'retry' }
+    maxRetries 3
     
     input:
     path(Datalist)
@@ -616,10 +699,11 @@ process CellTypist {
 }
 process RunAzimuth {
     publishDir "${params.outdir}/5-Seurat-Cell_Annotation", mode:'copy'
-    errorStrategy "ignore"
+    errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); return 'retry' }
+    maxRetries 3
 
     input:
-    path(Datalist)
+    tuple path(Datalist), path(Counts)
 
     output:    
     path("Azimuth/")
@@ -628,13 +712,19 @@ process RunAzimuth {
     script:
     """
     #!/usr/bin/env Rscript
+    suppressPackageStartupMessages({
     library(Seurat)
     library(Azimuth)
     library(ggplot2)
     library(patchwork)
+    library(BPCells)
+    })
+    options(future.globals.maxSize = 30 * 1024^3)  # 30 GiB
+    plan("multisession", workers = ${task.cpus})
+    set.seed(123)
     colors <- clusterExperiment::bigPalette
+    colors <- colors[colors!="black"]
     options(timeout=100000000)
-    options(future.globals.maxSize = 4 * 1024^3)  # 4 GB
     seurat_theme <- function(){
         theme_bw() +
             theme(panel.background = element_rect(colour = "black", size=0.1), 
@@ -642,33 +732,34 @@ process RunAzimuth {
                 axis.ticks.length=unit(.2, "cm"), axis.text = element_text(size=11), 
                 panel.grid.major = element_blank(), panel.grid.minor = element_blank(),legend.key = element_rect(colour = NA, fill = NA))
         }
-    datalist <- RunAzimuth("${Datalist}", reference = "pbmcref")
-    DimPlot(datalist, reduction = "ref.umap", group.by = c("seurat_clusters","predicted.celltype.l2"),label=T,repel=T,raster=FALSE, cols = colors) + seurat_theme()
+    datalist <- readRDS("${Datalist}")
+    datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
+    datalist <- RunAzimuth(datalist, reference = "pbmcref")
+    DimPlot(datalist, reduction = "ref.umap", group.by = c("seurat_clusters","predicted.celltype.l2"),label=T,repel=T,raster = F, cols = colors) + seurat_theme()
     ggsave("Azimuth.png",width = 24, height = 9)
 
     AzimuthAnnotation <- as.data.frame(datalist@meta.data[(grepl("predicted.celltype.l",colnames(datalist@meta.data))) & !(grepl("score",colnames(datalist@meta.data)))])
-    rm(datalist)
     gc()
-    Sobj <- readRDS("${Datalist}")
-    Sobj <- AddMetaData(Sobj, AzimuthAnnotation)
     system("mkdir -p Azimuth")
     write.table(AzimuthAnnotation, file = "Azimuth/Azimuth_annotation.tsv", row.names = T, quote = F, col.names = T, sep = "\\t")
-    for (Annotation in names(Sobj@meta.data)[grepl("predicted.celltype.",names(Sobj@meta.data))]){
+    for (Annotation in names(datalist@meta.data)[names(datalist@meta.data) %in% colnames(AzimuthAnnotation)]){
         print(Annotation)
-        DimPlot(Sobj,reduction = "umap", group.by = Annotation, cols = colors,raster=FALSE) + seurat_theme()
+        DimPlot(datalist,reduction = "umap", group.by = Annotation, cols = colors, raster = FALSE) + seurat_theme()
         ggsave(paste0("Azimuth/Azimuth.",Annotation,".png"),width = 9, height = 9)
     }
     """
 }
 process Seurat_Cell_Annotation {
     publishDir "${params.outdir}/5-Seurat-Cell_Annotation", mode:'copy'
-    
+    errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); return 'retry' }
+    maxRetries 3
+
     input:
-    path(Datalist)
+    tuple path(Datalist), path(Counts)
     file(ModelsCelltypist)
 
-    output:    
-    path("datalist.Cell_Annotation*.rds"), emit: rds 
+    output:
+    tuple path("${params.Project_Name}.Cell_Annotation.rds"), path(Counts), emit: rds
     path("*.png")
     path("Seurat_clusters/")
     path("SingleR/")
@@ -692,6 +783,8 @@ process Seurat_Cell_Annotation {
     library(BiocParallel)
     library(ggrepel)
     library(SingleR)
+    library(BPCells)
+    library(Matrix)
     })
     ## Run just one time
     ref1 <- celldex::BlueprintEncodeData()
@@ -700,10 +793,9 @@ process Seurat_Cell_Annotation {
     ref4 <- celldex::MonacoImmuneData()
     shared <- Reduce(intersect, list(rownames(ref1), rownames(ref2), rownames(ref3), rownames(ref4)))
     ref1 <- ref1[shared,]; ref2 <- ref2[shared,]; ref3 <- ref3[shared,]; ref4 <- ref4[shared,]
-    #save(ref1, ref2, ref3, ref4, cl, file = 'SingleR_refs.RData')
-    #load("Data/SingleR_refs.RData")
     set.seed(123)
-    colors <- c("#E31A1C","#1F78B4","#33A02C","#FF7F00","#6A3D9A","#B15928","#A6CEE3","#bd18ea","cyan","#B2DF8A","#FB9A99","deeppink4","#00B3FFFF","#CAB2D6","#FFFF99","#05188a","#CCFF00FF","cornflowerblue","#f4cc03","black","blueviolet","#4d0776","maroon3","blue","#E5D8BD","cadetblue4","#e5a25a","lightblue1","#F781BF","#FC8D62","#8DA0CB","#E78AC3","green3","#E7298A","burlywood3","#A6D854","firebrick","#FFFFCC","mediumpurple","#1B9E77","#FFD92F","deepskyblue4","yellow3","#00FFB2FF","#FDBF6F","#FDCDAC","gold3","#F4CAE4","#E6F5C9","#FF00E6FF","#7570B3","goldenrod","#85848f","lightpink3","olivedrab","cadetblue3")
+    colors <- clusterExperiment::bigPalette
+    colors <- colors[colors!="black"]
     seurat_theme <- function(){
         theme_bw() +
             theme(panel.background = element_rect(colour = "black", size=0.1), 
@@ -712,46 +804,45 @@ process Seurat_Cell_Annotation {
                 panel.grid.major = element_blank(), panel.grid.minor = element_blank(),legend.key = element_rect(colour = NA, fill = NA))
     }
     ppSingleR <- function(sobj, cluster){
-    sce <- as.SingleCellExperiment(sobj)
-    
-    pred <- SingleR(test = sce, 
-                    ref = list(ref1, ref2, ref3, ref4), 
-                    labels = list(ref1\$label.ont, ref2\$label.ont, ref3\$label.ont, ref4\$label.ont), 
-                    clusters = sce[[cluster]], BPPARAM = MulticoreParam(1))
-    
-    sobj <- SetIdent(sobj, value = cluster)
-    new.cluster.ids <- pred\$labels
-    names(new.cluster.ids) <- levels(Idents(sobj))
-    sobj <- RenameIdents(sobj, new.cluster.ids)
-    sobj[[paste0('SingleR_ont', gsub('Seurat_clusters', '', cluster))]] <- Idents(sobj)
-    
-    onts <- pred\$labels
-    new.cluster.ids <- c()
-    for (z in 1:length(onts)) {
-        new.cluster.ids <- c(new.cluster.ids, termLabel(term(cl, onts[z])))
+        sce <- as.SingleCellExperiment(sobj)
+        
+        pred <- SingleR(test = sce, 
+                        ref = list(ref1, ref2, ref3, ref4), 
+                        labels = list(ref1\$label.ont, ref2\$label.ont, ref3\$label.ont, ref4\$label.ont), 
+                        clusters = sce[[cluster]], BPPARAM = MulticoreParam(1))
+        
+        sobj <- SetIdent(sobj, value = cluster)
+        new.cluster.ids <- pred\$labels
+        names(new.cluster.ids) <- levels(Idents(sobj))
+        sobj <- RenameIdents(sobj, new.cluster.ids)
+        sobj[[paste0('SingleR_ont', gsub('Seurat_clusters', '', cluster))]] <- Idents(sobj)
+        
+        onts <- pred\$labels
+        new.cluster.ids <- c()
+        for (z in 1:length(onts)) {
+            new.cluster.ids <- c(new.cluster.ids, termLabel(Term(cl, onts[z])))
+        }
+        sobj <- SetIdent(sobj, value = cluster)
+        names(new.cluster.ids) <- levels(Idents(sobj))
+        sobj <- RenameIdents(sobj, new.cluster.ids)
+        sobj[[paste0('SingleR', gsub('Seurat_clusters', '', cluster))]] <- Idents(sobj)
+        
+        return(sobj)
     }
-    sobj <- SetIdent(sobj, value = cluster)
-    names(new.cluster.ids) <- levels(Idents(sobj))
-    sobj <- RenameIdents(sobj, new.cluster.ids)
-    sobj[[paste0('SingleR', gsub('Seurat_clusters', '', cluster))]] <- Idents(sobj)
-    
-    return(sobj)
-    }
-    CellAnnotations <- function(RDS){
-        print(paste0("Working in ",RDS))
-        Sobj <- readRDS(RDS)
+    CellAnnotations <- function(Sobj){
         system(paste0("mkdir -p Seurat_clusters"))
         system(paste0("mkdir -p SingleR"))
+        Sobj[["RNA"]]\$data <- Matrix(as.matrix(GetAssayData(Sobj, layer = "data")), sparse = T)
         clusters <- grep('Seurat_clusters', names(Sobj@meta.data), value = T)
         for (cluster in clusters) {
             Sobj <- ppSingleR(Sobj, cluster)
             print(cluster)
-            DimPlot(Sobj,reduction = "umap", group.by = cluster, cols = colors,raster=FALSE) + seurat_theme()
+            DimPlot(Sobj,reduction = "umap", group.by = cluster, cols = colors, raster = FALSE) + seurat_theme()
             ggsave(paste0("Seurat_clusters/",cluster,".png"),heigh=9,width=9)
         }
         for (Cluster in names(Sobj@meta.data)[grepl("SingleR_res.",names(Sobj@meta.data))]){
             print(Cluster)
-            DimPlot(Sobj,reduction = "umap", group.by = Cluster, cols = colors,raster=FALSE) + seurat_theme()
+            DimPlot(Sobj,reduction = "umap", group.by = Cluster, cols = colors, raster = FALSE) + seurat_theme()
             ggsave(paste0("SingleR/SingleR.",Cluster,".png"),width = 9, height = 9)
         }
         ###################################################################################################################################################
@@ -763,7 +854,7 @@ process Seurat_Cell_Annotation {
                 ModelName <- gsub("_Celltypist_annotation.csv","",CelltypistAnnot)
                 for (Cluster in names(Sobj@meta.data)[grepl(paste0(ModelName,"_res"),names(Sobj@meta.data))]){
                     print(Cluster)
-                    DimPlot(Sobj,reduction = "umap", group.by = Cluster, cols = colors,raster=FALSE) + seurat_theme()
+                    DimPlot(Sobj,reduction = "umap", group.by = Cluster, cols = colors, raster = FALSE) + seurat_theme()
                     ggsave(paste0("Celltypist/Celltypist.",Cluster,".png"),width = 9, height = 9)
                 }
                 clustree(Sobj,prefix=paste0(ModelName,"_res."),node_text_angle = 15)
@@ -776,22 +867,27 @@ process Seurat_Cell_Annotation {
         clustree(Sobj,prefix="Seurat_clusters_res.",node_text_angle = 15)
         ggsave(paste0("Clustree_Seurat_clusters.png"), width = 21,height = 9)
         ###################################################################################################################################################
-        return(Sobj)
+        return(Sobj@meta.data)
     }
-    datalist <- CellAnnotations("${Datalist}")
+    datalist <- readRDS("${Datalist}")
+    datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
+    NewMetaData <- CellAnnotations(datalist)
+    gc()
+    datalist@meta.data <- NewMetaData
     if ("${params.ModelsCelltypist}" != ""){
         Idents(datalist) <- "Immune_All_Low_res.0.8"
     } else {
         Idents(datalist) <- "SingleR_res.0.8"
     }
-    saveRDS(datalist, file = "datalist.Cell_Annotation.rds")
+    datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
+    saveRDS(datalist, file = "${params.Project_Name}.Cell_Annotation.rds")
     """
 }
 process CellChat {
     publishDir "${params.outdir}/6-Cell_Communication", mode:'copy'
 
     input:
-    path(Datalist)
+    tuple path(Datalist), path(Counts)
 
     output:    
     path("*.pdf")
@@ -809,9 +905,14 @@ process CellChat {
     library(reshape2)
     library(ComplexHeatmap)
     library(CellChat)
-    library(reticulate)})
+    library(reticulate)
+    library(BPCells)
+    library(Matrix)
+    })
     set.seed(123)
     data <- readRDS('${Datalist}')
+    data[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
+    data[["RNA"]]\$data <- Matrix(as.matrix(GetAssayData(data, layer = "data")), sparse = T)
 
     cellChat <- createCellChat(object = data, group.by = "ident", assay = "RNA")
     ##############################################################################################
@@ -844,7 +945,7 @@ process CellChat {
 
     groupSize <- as.numeric(table(cellChat@idents))
     mat <- cellChat@net\$weight
-    par(mfrow = c(3,4), xpd=TRUE)
+    par(mfrow = c(3,4), xpd = T)
     pdf(paste0("InteractionStrength.perCellType.pdf"))
     for (i in 1:nrow(mat)) {
     mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
@@ -882,6 +983,7 @@ process Seurat_create_object_mouse {
     library(dplyr) ###
     library(gprofiler2)
     colors <- clusterExperiment::bigPalette
+    colors <- colors[colors!="black"]
 
     hk <- c("C1orf43", "CHMP2A", "EMC7", "GPI", "PSMB2", "PSMB4", "RAB7A", "REEP5", "SNRPD3", "VCP", "VPS29")
     hk <-  gorth(hk, source_organism = "hsapiens", target_organism = "mmusculus")\$ortholog_name
