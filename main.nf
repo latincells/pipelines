@@ -735,17 +735,22 @@ process RunAzimuth {
     datalist <- readRDS("${Datalist}")
     datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
     datalist <- RunAzimuth(datalist, reference = "pbmcref")
-    DimPlot(datalist, reduction = "ref.umap", group.by = c("seurat_clusters","predicted.celltype.l2"),label=T,repel=T,raster = F, cols = colors) + seurat_theme()
+    DimPlot(datalist, reduction = "ref.umap", group.by = c("seurat_clusters","predicted.celltype.l2"), label = T, repel = T, raster = F, cols = colors) + seurat_theme()
     ggsave("Azimuth.png",width = 24, height = 9)
 
-    AzimuthAnnotation <- as.data.frame(datalist@meta.data[(grepl("predicted.celltype.l",colnames(datalist@meta.data))) & !(grepl("score",colnames(datalist@meta.data)))])
+    AzimuthAnnotation <- as.data.frame(datalist@meta.data[(grepl("predicted.celltype.l", colnames(datalist@meta.data))) & !(grepl("score", colnames(datalist@meta.data)))])
     gc()
     system("mkdir -p Azimuth")
     write.table(AzimuthAnnotation, file = "Azimuth/Azimuth_annotation.tsv", row.names = T, quote = F, col.names = T, sep = "\\t")
     for (Annotation in names(datalist@meta.data)[names(datalist@meta.data) %in% colnames(AzimuthAnnotation)]){
         print(Annotation)
-        DimPlot(datalist,reduction = "umap", group.by = Annotation, cols = colors, raster = FALSE) + seurat_theme()
-        ggsave(paste0("Azimuth/Azimuth.",Annotation,".png"),width = 9, height = 9)
+        if (length(unique(datalist@meta.data[[Annotation]])) <= length(colors)){
+                DimPlot(datalist, reduction = "umap", group.by = Annotation, cols = colors, raster = F) + seurat_theme()
+                ggsave(paste0("Azimuth/Azimuth.", Annotation,".png"), width = 9, height = 9)
+            } else {
+                DimPlot(datalist, reduction = "umap", group.by = Annotation, raster = F) + seurat_theme()
+                ggsave(paste0("Azimuth/Azimuth.", Annotation,".png"), width = 9, height = 9) 
+            }
     }
     """
 }
