@@ -10,6 +10,7 @@ params.outdir = "${params.MainOutdir}/${params.Project_Name}/"  // Directorio do
 params.Batch = "orig.ident"
 params.NPlex= ""
 params.Sample_metadata = ""
+params.SCTransform = false
 params.Mouse = false
 params.Freemuxlet = false
 params.VCF_Files = "" 
@@ -138,8 +139,7 @@ process SoupX_scDblFinder {
     errorStrategy 'ignore'
     
     input: 
-    tuple val(sample_id), path(reads)
-    file(demultiplexData)
+    tuple val(sample_id), path(reads), file(demultiplexData)
 
     output:      
     path("$sample_id"), emit: clean_reads
@@ -281,7 +281,6 @@ process SoupX_scDblFinder {
     """
 }
 process Seurat_Object_creation {
-    label 'BigMem'
     publishDir "${params.outdir}/3-Seurat-Object", mode:'copy'
 
     input:
@@ -321,7 +320,6 @@ process Seurat_Object_creation {
         meta <- read.delim(basename("${params.Sample_metadata}"),sep=",")}
         }
 
-    #for (i in 1:length(files)) {
     process_file <- function(i) {
        Multiplex <- "No"
        Loop_scObject <- CreateSeuratObject(counts = Read10X(files[i]), project = fnames[i], min.cells = 3, min.features = 200)
@@ -369,14 +367,7 @@ process Seurat_Object_creation {
                 }
             }
         }
-        #if (i ==1) {
-        #    datalist <- Loop_scObject
-        #} else {
-        #    datalist <- merge(datalist, y = Loop_scObject)
-        #}
-        #rm(Loop_scObject)
         gc()
-        #print(paste(i, 'out', length(files)))}
         Loop_scObject_processed <- Loop_scObject
         Loop_scObject_processed[["percent.mt"]] <- PercentageFeatureSet(Loop_scObject_processed, pattern="^MT-")
         Loop_scObject_processed <- Loop_scObject_processed %>%
@@ -394,7 +385,6 @@ process Seurat_Object_creation {
     }
 
     datalist_list <- future_lapply(1:length(files), process_file, future.seed = TRUE)
-    #datalist <- Reduce(merge, datalist)
     datalist <- Reduce(function(x, y) merge(x, y = y), datalist_list)
     rm(datalist_list)
     gc()
@@ -413,7 +403,6 @@ process Seurat_Object_creation {
     """
 }
 process Seurat_QC_integration {
-    label 'BigMem'
     publishDir "${params.outdir}/4-Seurat_QC-Integration", mode:'copy'
     
     input:
@@ -421,10 +410,9 @@ process Seurat_QC_integration {
     path(Stats)
 
     output:    
-    tuple path("${params.Project_Name}.PostQC-Int.rds"), path(Counts), emit: rds
-    path("Analysis/") 
+    path("${params.Project_Name}.PostQC-Int.rds"), emit: rds
+    path("*", type: 'dir')
     path("StatsTable.tsv"), emit: Stats
-    path("DataForCelltypist/"), emit: DataForCelltypist, optional: true
 
     script:
     """
@@ -436,6 +424,8 @@ process Seurat_QC_integration {
     library(dplyr)
     library(ggplot2) 
     library(harmony)
+    library(future)
+    library(future.apply)
     })
     options(future.globals.maxSize = 30 * 1024^3)  # 30 GiB
     plan("multisession", workers = ${task.cpus})
@@ -467,37 +457,35 @@ process Seurat_QC_integration {
     }
     Stats <- Reduce(rbind,Stats)
 
-    system("mkdir -p Analysis/")
-    system("mkdir -p Analysis/Images/")
-    system("mkdir -p Analysis/Images/1-QC/")
-    system("mkdir -p Analysis/Images/2-PreIntegration/")
+    system("mkdir -p 1-QC/")
+    system("mkdir -p 2-PreIntegration/")
     datalist <- readRDS("${Datalist}")
     datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
     NLibs <- length(unique(datalist@meta.data\$orig.ident))
     if (NLibs <= 25) {
-        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "${params.Batch}",raster = F)
-        ggsave(paste0("Analysis/Images/1-QC/Pre-QC.byBatch.png"), width = 8, height = 18)
+        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "${params.Batch}", raster = F)
+        ggsave(paste0("1-QC/Pre-QC.byBatch.png"), width = 8, height = 18)
         VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "orig.ident", pt.size = F)
-        ggsave(paste0("Analysis/Images/1-QC/Pre-QC.byBatch.V2.png"), width = 8, height = 18)
+        ggsave(paste0("1-QC/Pre-QC.byBatch.V2.png"), width = 8, height = 18)
     } else {
-        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "${params.Batch}",raster = F)
-        ggsave(paste0("Analysis/Images/1-QC/Pre-QC.byBatch.png"), width = (8/25)*NLibs, height = 18, limitsize = F)
+        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "${params.Batch}", raster = F)
+        ggsave(paste0("1-QC/Pre-QC.byBatch.png"), width = (8/25)*NLibs, height = 18, limitsize = F)
         VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "orig.ident", pt.size = F)
-        ggsave(paste0("Analysis/Images/1-QC/Pre-QC.byBatch.V2.png"), width = (8/25)*NLibs, height = 18, limitsize = F)
+        ggsave(paste0("1-QC/Pre-QC.byBatch.V2.png"), width = (8/25)*NLibs, height = 18, limitsize = F)
     }
     Sample.qc <- FetchData(datalist, vars=c("nFeature_RNA","nCount_RNA","percent.mt"))
-    Sample.qc %>% mutate(keep = if_else(nCount_RNA > 500 & nFeature_RNA > 200 & percent.mt < 15, "Keep", "Remove")) %>%
+    Sample.qc %>% mutate(keep = if_else(nCount_RNA > ${params.MinUMIs} & nFeature_RNA > ${params.MinGenes} & percent.mt < ${params.Max_mtRNA}, "Keep", "Remove")) %>%
         ggplot() + 
         geom_point(aes(nCount_RNA, nFeature_RNA, colour=keep), alpha=.50) +
-        geom_vline(xintercept = 500, color="red") + 
-        geom_hline(yintercept = 200, color="red") +
+        geom_vline(xintercept = ${params.MinUMIs}, color="red") + 
+        geom_hline(yintercept = ${params.MinGenes}, color="red") +
         scale_x_log10() + 
         scale_y_log10() + 
         seurat_theme() +
         labs(colour = "Cell Status")
-    ggsave(paste0("Analysis/Images/1-QC/Pre-QC.FilterCells.png"), width = 16, height = 9)
+    ggsave(paste0("1-QC/Pre-QC.FilterCells.png"), width = 16, height = 9)
     rm(Sample.qc)
-    datalist <- datalist %>% NormalizeData(verbose = F) %>% subset(subset = nCount_RNA > 500 & nFeature_RNA > 200 & percent.mt < 15)
+    datalist <- datalist %>% NormalizeData(verbose = F) %>% subset(subset = nCount_RNA > ${params.MinUMIs} & nFeature_RNA > ${params.MinGenes} & percent.mt < ${params.Max_mtRNA})
 
     PostQC <- as.data.frame(table(datalist@meta.data\$orig.ident))
     colnames(PostQC) <- c("RunID","PostQC")
@@ -514,145 +502,179 @@ process Seurat_QC_integration {
     gc()
     datalist <- NormalizeData(datalist, verbose = F)
     if (NLibs <= 25) {
-        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "${params.Batch}",raster = F)
-        ggsave(paste0("Analysis/Images/1-QC/QC.byBatch.png"), width = 8, height = 18)
+        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "${params.Batch}", raster = F)
+        ggsave(paste0("1-QC/QC.byBatch.png"), width = 8, height = 18)
         VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "orig.ident", pt.size = F)
-        ggsave(paste0("Analysis/Images/1-QC/QC.byBatch.V2.png"), width = 8, height = 18)
+        ggsave(paste0("1-QC/QC.byBatch.V2.png"), width = 8, height = 18)
     } else {
-        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "${params.Batch}",raster = F)
-        ggsave(paste0("Analysis/Images/1-QC/QC.byBatch.png"), width = (8/25)*NLibs, height = 18, limitsize = F)
+        VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "${params.Batch}", raster = F)
+        ggsave(paste0("1-QC/QC.byBatch.png"), width = (8/25)*NLibs, height = 18, limitsize = F)
         VlnPlot(datalist, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "orig.ident", pt.size = F)
-        ggsave(paste0("Analysis/Images/1-QC/QC.byBatch.V2.png"), width = (8/25)*NLibs, height = 18, limitsize = F)
+        ggsave(paste0("1-QC/QC.byBatch.V2.png"), width = (8/25)*NLibs, height = 18, limitsize = F)
     }
-    ###################################################################################################################################################
-    datalist <- FindVariableFeatures(datalist, selection.method = "vst", nfeatures = 2000, verbose = F)
-    LabelPoints(plot=VariableFeaturePlot(datalist), points = head(VariableFeatures(datalist), 15), repel=T, xnudge=0, ynudge=0) + theme(legend.position="none") + seurat_theme()
-    ggsave(paste0("Analysis/Images/1-QC/VariableFeatures.png"), width = 9, height = 9)
-    #all.genes <- rownames(datalist)
-    datalist <- ScaleData(datalist, verbose = F) # ,features = all.genes
-    gc()
-    datalist <- ScaleData(datalist,vars.to.regress = c('percent.mt')) #, 'housekeeping1', 'ribo.percent1', 'nFeature_RNA', 'nCount_RNA', 'S.Score', 'G2M.Score'
-    datalist <- RunPCA(datalist, verbose = F)
+
+    if ("${params.SCTransform}" == "true"){
+        layers <- SplitObject(datalist, split.by = "orig.ident")
+        layers <- future_lapply(layers, function(x) {
+        SCTransform(x, vars.to.regress = "percent.mt", verbose = F, seed.use = 123, vst.flavor = "v2")
+        }, future.seed = T)
+        var.features <- SelectIntegrationFeatures(object.list = layers, nfeatures = ${params.nVariableFeatures})
+        datalist <- merge(x = layers[[1]], y = layers[-1])
+        datalist <- JoinLayers(datalist, assay = "RNA")
+        datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
+        DefaultAssay(datalist) <- "SCT"
+        VariableFeatures(datalist) <- var.features
+        rm(layers)
+        gc()
+        datalist <- RunPCA(datalist, assay = "SCT")
+    } else {
+        datalist <- FindVariableFeatures(datalist, selection.method = "vst", nfeatures = ${params.nVariableFeatures}, verbose = F)
+        LabelPoints(plot=VariableFeaturePlot(datalist), points = head(VariableFeatures(datalist), 15), repel=T, xnudge=0, ynudge=0) + theme(legend.position="none") + seurat_theme()
+        ggsave(paste0("1-QC/VariableFeatures.png"), width = 9, height = 9)
+        #all.genes <- rownames(datalist)
+        datalist <- ScaleData(datalist, verbose = F) # ,features = all.genes
+        gc()
+        datalist <- ScaleData(datalist,vars.to.regress = c('percent.mt')) #, 'housekeeping1', 'ribo.percent1', 'nFeature_RNA', 'nCount_RNA', 'S.Score', 'G2M.Score'
+        datalist <- RunPCA(datalist, verbose = F)
+    } 
 
     datalist <- SetIdent(datalist,value = "orig.ident")
-    DimPlot(datalist, reduction = "pca",raster = F)
-    ggsave(paste0("Analysis/Images/1-QC/PCA.png"), width = 9, height = 9)
-    Best_PC <- optimizePCA(datalist, 0.9) # 0.9 is % of variance explained by these PCs
+    DimPlot(datalist, reduction = "pca", raster = F)
+    ggsave(paste0("1-QC/PCA.png"), width = 9, height = 9)
+    Best_PC <- optimizePCA(datalist, ${params.PCA_VarianceCovered}) # 0.9 is % of variance explained by these PCs
     ElbowPlot(datalist, ndims = length(datalist@reductions\$pca), reduction = "pca") + geom_vline(xintercept=Best_PC, linetype = "dashed", color = "red")
-    ggsave(paste0("Analysis/Images/1-QC/ElbowPlot.png"), width = 9, height = 9, bg="white")
-    datalist <- RunUMAP(datalist, reduction = "pca", dims = 1:Best_PC, verbose = F, seed.use = 123, reduction.name = "PreInt_UMAP")
+    ggsave(paste0("1-QC/ElbowPlot.png"), width = 9, height = 9, bg="white")
+    datalist <- RunUMAP(datalist, reduction = "pca", dims = 1:Best_PC, verbose = F, seed.use = 123, reduction.name = "PreInt_UMAP", reduction.key = "UMAP_")
     ###################################################################################################################################################
     if ("${params.Batch}" != "orig.ident"){
         DimPlot(datalist,reduction = "PreInt_UMAP", group.by = "${params.Batch}", cols = colors, raster = F) + seurat_theme()
-        ggsave(paste0("Analysis/Images/2-PreIntegration/Batch.png"), width = 9, height = 9)
+        ggsave(paste0("2-PreIntegration/Batch.png"), width = 9, height = 9)
     } else {
         if (length(unique(datalist@meta.data\$orig.ident)) <= length(colors)){
-            DimPlot(datalist,reduction = "PreInt_UMAP", group.by = "orig.ident", cols = colors, raster = F) + seurat_theme()
+            DimPlot(datalist,reduction = "PreInt_UMAP", group.by = "orig.ident", cols = colors, raster = F) + guides(color = guide_legend(ncol = 1+trunc(NLibs/35),byrow = TRUE,override.aes = list(size = 2))) + seurat_theme()
         } else {
-            DimPlot(datalist,reduction = "PreInt_UMAP", group.by = "orig.ident", raster = F) + seurat_theme()}
-        ggsave(paste0("Analysis/Images/2-PreIntegration/Orig.ident.png"), width = 9, height = 9)
+            DimPlot(datalist,reduction = "PreInt_UMAP", group.by = "orig.ident", raster = F) + guides(color = guide_legend(ncol = 1+trunc(NLibs/35),byrow = TRUE,override.aes = list(size = 2))) + seurat_theme()}
+        ggsave(paste0("2-PreIntegration/Orig.ident.png"), width = 11+(trunc(NLibs/35)), height = 9)
     }
-    DimPlot(datalist, group.by = 'Phase', reduction = 'PreInt_UMAP',raster = F) + seurat_theme()
-    ggsave("Analysis/Images/2-PreIntegration/Phase.png", width = 9, height = 9)
-    datalist %>% FeaturePlot(reduction = "PreInt_UMAP",features="nCount_RNA",raster = F) + seurat_theme()
-    ggsave(paste0("Analysis/Images/2-PreIntegration/nCount_RNA.png"), width = 9, height = 9)
-    datalist %>% FeaturePlot(reduction = "PreInt_UMAP",features="ribo.percent1",raster = F) + seurat_theme()
-    ggsave(paste0("Analysis/Images/2-PreIntegration/Ribo.percent1.png"), width = 9, height = 9)
-    datalist %>% FeaturePlot(reduction = "PreInt_UMAP",features="percent.mt",raster = F) + seurat_theme()
-    ggsave(paste0("Analysis/Images/2-PreIntegration/Percent.mt.png"), width = 9, height = 9)
+    DimPlot(datalist, group.by = 'Phase', reduction = 'PreInt_UMAP', raster = F) + seurat_theme()
+    ggsave("2-PreIntegration/Phase.png", width = 9, height = 9)
+    FeaturePlot(datalist, reduction = "PreInt_UMAP", features = "nCount_RNA", raster = F, max.cutoff = 1000) + scale_color_gradient(low = "darkblue", high = "#ECEEBF", limits = c(${params.MinUMIs}, 1000)) + seurat_theme()
+    ggsave(paste0("2-PreIntegration/nCount_RNA.png"), width = 9, height = 9)
+    FeaturePlot(datalist, reduction = "PreInt_UMAP", features = "ribo.percent1", raster = F) + seurat_theme()
+    ggsave(paste0("2-PreIntegration/Ribo.percent1.png"), width = 9, height = 9)
+    FeaturePlot(datalist, reduction = "PreInt_UMAP", features = "percent.mt", raster = F, min.cutoff = 5) + scale_color_gradient(low = "#ECEEBF", high = "darkblue", limits = c(5, ${params.Max_mtRNA})) + seurat_theme()
+    ggsave(paste0("2-PreIntegration/Percent.mt.png"), width = 9, height = 9)
     if (any(colnames(datalist@meta.data) == "SNG.BEST.GUESS")){
         if (length(unique(datalist@meta.data\$SNG.BEST.GUESS)) <= length(colors)){
             DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'PreInt_UMAP', cols = colors, raster = F) + seurat_theme()
-            ggsave(paste0("Analysis/Images/2-PreIntegration/Demultiplex.png"), width = 9, height = 9)
+            ggsave(paste0("2-PreIntegration/Demultiplex.png"), width = 9, height = 9)
         }
     }
     ###################################################################################################################################################
     if (length(unique(datalist@meta.data\$orig.ident)) == 1){
         if ("SNG.BEST.GUESS" %in% colnames(datalist@meta.data)){
-            system("mkdir -p Analysis/Images/3-PosIntegration/")
+            system("mkdir -p 3-PosIntegration/")
             datalist <- datalist %>% RunHarmony("SNG.BEST.GUESS", plot_convergence = T, max_iter = 50)
-            datalist <- datalist %>% 
-            RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, seed.use = 123) %>% 
-            FindNeighbors(reduction = "harmony", dims = 1:Best_PC) %>% 
-            FindClusters(resolution = seq(0.4,1.2,0.2)) %>% 
-            identity()
-            FeaturePlot(datalist,reduction = "umap",features="nCount_RNA",raster = F) + seurat_theme()
-            ggsave(paste0("Analysis/Images/3-PosIntegration/nCount_RNA.png"), width = 9, height = 9)
-            FeaturePlot(datalist, reduction = "umap",features="ribo.percent1",raster = F) + seurat_theme()
-            ggsave(paste0("Analysis/Images/3-PosIntegration/Ribo.percent1.png"), width = 9, height = 9)
-            DimPlot(datalist, group.by = 'Phase', reduction = 'umap',raster = F) + seurat_theme()
-            ggsave("Analysis/Images/3-PosIntegration/Phase.png", width = 9, height = 9)
-            datalist %>% FeaturePlot(reduction = "umap",features="percent.mt",raster = F) + seurat_theme()
-            ggsave(paste0("Analysis/Images/3-PosIntegration/Percent.mt.png"), width = 9, height = 9)
-            if (length(unique(datalist@meta.data\$SNG.BEST.GUESS)) <= length(colors)){
-                DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors, raster = F) + seurat_theme()
-                ggsave(paste0("Analysis/Images/3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
-            }
-            colnames(datalist@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist@meta.data))
+            datalist <- datalist %>% RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, seed.use = 123, reduction.key = "UMAP_")
         } else {
-            datalist <- datalist %>% 
-            FindNeighbors(reduction = "pca", dims = 1:Best_PC) %>% 
-            FindClusters(resolution = seq(0.4,1.2,0.2)) %>% 
-            identity()
-            colnames(datalist@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist@meta.data))
+            datalist@reductions\$umap <- datalist@reductions\$PreInt_UMAP
         }
     } else {
-        system("mkdir -p Analysis/Images/3-PosIntegration/")
+        system("mkdir -p 3-PosIntegration/")
         if ("${params.Batch}" != "orig.ident"){
             datalist <- datalist %>% RunHarmony(c("${params.Batch}","orig.ident"), plot_convergence = T, max_iter = 50)
         } else {
             datalist <- datalist %>% RunHarmony("orig.ident", plot_convergence = T, max_iter = 50)
         }
-        datalist <- datalist %>% 
-        RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, seed.use = 123) %>% 
-        FindNeighbors(reduction = "harmony", dims = 1:Best_PC) %>% 
-        FindClusters(resolution = seq(0.4,1.2,0.2)) %>% 
-        identity()
-        colnames(datalist@meta.data) <- gsub('RNA_snn', 'Seurat_clusters', colnames(datalist@meta.data))
-        ###################################################################################################################################################
+        datalist <- datalist %>% RunUMAP(reduction = "harmony", verbose = F, dims = 1:Best_PC, seed.use = 123, reduction.key = "UMAP_")
+    }
+    datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
+    saveRDS(datalist, '${params.Project_Name}.PostQC-Int.rds')
+    if ((length(unique(datalist@meta.data\$orig.ident)) != 1) | ("${params.Batch}" != "orig.ident") | ("SNG.BEST.GUESS" %in% colnames(datalist@meta.data))){
         if ("${params.Batch}" != "orig.ident"){
             DimPlot(datalist,reduction = "umap", group.by = "${params.Batch}", cols = colors, raster = F) + seurat_theme()
-            ggsave(paste0("Analysis/Images/3-PosIntegration/Batch.png"), width = 9, height = 9)
+            ggsave(paste0("3-PosIntegration/Batch.png"), width = 9, height = 9)
         } else {
             if (length(unique(datalist@meta.data\$orig.ident)) <= length(colors)){
-                DimPlot(datalist,reduction = "umap", group.by = "orig.ident", cols = colors, raster = F) + seurat_theme()
-            } else {DimPlot(datalist,reduction = "umap", group.by = "orig.ident", raster = F) + seurat_theme()}
-            ggsave(paste0("Analysis/Images/3-PosIntegration/Orig.ident.png"), width = 9, height = 9)
+                DimPlot(datalist,reduction = "umap", group.by = "orig.ident", cols = colors, raster = F) + guides(color = guide_legend(ncol = 1+trunc(NLibs/35),byrow = TRUE,override.aes = list(size = 2))) + seurat_theme()
+            } else {DimPlot(datalist,reduction = "umap", group.by = "orig.ident", raster = F) + guides(color = guide_legend(ncol = 1+trunc(NLibs/35),byrow = TRUE,override.aes = list(size = 2))) + seurat_theme()}
+            ggsave(paste0("3-PosIntegration/Orig.ident.png"), width = 11+(trunc(NLibs/35)), height = 9)
         }
-        FeaturePlot(datalist,reduction = "umap",features="nCount_RNA",raster = F) + seurat_theme()
-        ggsave(paste0("Analysis/Images/3-PosIntegration/nCount_RNA.png"), width = 9, height = 9)
-        FeaturePlot(datalist, reduction = "umap",features="ribo.percent1",raster = F) + seurat_theme()
-        ggsave(paste0("Analysis/Images/3-PosIntegration/Ribo.percent1.png"), width = 9, height = 9)
-        DimPlot(datalist, group.by = 'Phase', reduction = 'umap',raster = F) + seurat_theme()
-        ggsave("Analysis/Images/3-PosIntegration/Phase.png", width = 9, height = 9)
-        datalist %>% FeaturePlot(reduction = "umap",features="percent.mt",raster = F) + seurat_theme()
-        ggsave(paste0("Analysis/Images/3-PosIntegration/Percent.mt.png"), width = 9, height = 9)
+        FeaturePlot(datalist, reduction = "umap", features = "nCount_RNA", raster = F, max.cutoff = 1000) + scale_color_gradient(low = "darkblue", high = "#ECEEBF", limits = c(${params.MinUMIs}, 1000)) + seurat_theme()
+        ggsave(paste0("3-PosIntegration/nCount_RNA.png"), width = 9, height = 9)
+        FeaturePlot(datalist, reduction = "umap", features = "ribo.percent1", raster = F) + seurat_theme()
+        ggsave(paste0("3-PosIntegration/Ribo.percent1.png"), width = 9, height = 9)
+        DimPlot(datalist, group.by = 'Phase', reduction = 'umap', raster = F) + seurat_theme()
+        ggsave("3-PosIntegration/Phase.png", width = 9, height = 9)
+        FeaturePlot(datalist, reduction = "umap", features = "percent.mt", raster = F, min.cutoff = 5) + scale_color_gradient(low = "#ECEEBF", high = "darkblue", limits = c(5, ${params.Max_mtRNA})) + seurat_theme()
+        ggsave(paste0("3-PosIntegration/Percent.mt.png"), width = 9, height = 9)
         if (any(colnames(datalist@meta.data) == "SNG.BEST.GUESS")){
             if (length(unique(datalist@meta.data\$SNG.BEST.GUESS)) <= length(colors)){
                 DimPlot(datalist, group.by = 'SNG.BEST.GUESS', reduction = 'umap', cols = colors, raster = F) + seurat_theme()
-                ggsave(paste0("Analysis/Images/3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
+                ggsave(paste0("3-PosIntegration/Demultiplex.png"), width = 9, height = 9)
             }
         }
     }
-    saveRDS(datalist, '${params.Project_Name}.PostQC-Int.rds')
-    if ("${params.ModelsCelltypist}" != ""){
-        library(Matrix)
-        gc()
-        DropletUtils:::write10xCounts(x = Matrix(as.matrix(GetAssayData(datalist, layer = "counts")), sparse = T), path = paste0("DataForCelltypist"), overwrite = T)
-        gc()
+        """
+}
+process Seurat_Clustering {
+    publishDir "${params.outdir}/5-Seurat-Cell_Annotation", mode:'copy'
+
+    input:
+    path(Datalist)
+    path(Counts)
+
+    output:
+    path("${params.Project_Name}.Clusters.rds"), emit: rds
+    path("DataForCelltypist/"), emit: DataForCelltypist, optional: true
+
+    script:
+    """
+    #!/usr/bin/env Rscript
+    suppressPackageStartupMessages({
+    library(Seurat)
+    library(preprocessCore)
+    library(BPCells)
+    library(dplyr)
+    library(ggplot2)
+    })
+    options(future.globals.maxSize = 35 * 1024^3)  # 30 GiB
+    colors <- clusterExperiment::bigPalette
+    colors <- colors[colors!="black"]
+    set.seed(123)
+
+    datalist <- readRDS("${Datalist}")
+    datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
+    Best_PC <- length(datalist@commands\$RunUMAP.RNA.pca\$dims)
+    datalist <- datalist %>% FindNeighbors(reduction = "harmony", dims = 1:Best_PC) %>% FindClusters(resolution = seq(${params.MinResolution},${params.MaxResolution},${params.ResolutionIncreaseBy})) %>% identity()
+    if (any(grepl("RNA_snn|SCT_snn", colnames(datalist@meta.data)))) {
+        colnames(datalist@meta.data) <- gsub("RNA_snn|SCT_snn", "Seurat_clusters", colnames(datalist@meta.data))
+    }
+    datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
+    saveRDS(datalist, '${params.Project_Name}.Clusters.rds')
+    if ("${params.Celltypist}" == "true") {
+        system("mkdir -p DataForCelltypist")
         write.table(datalist@meta.data,file = paste0("DataForCelltypist/Metadata.csv"), row.names = T, quote = F, col.names = T, sep = "\\t")
         write.table(datalist@reductions\$umap@cell.embeddings,file = paste0("DataForCelltypist/Cell.embeddings.UMAP.csv"), row.names = T, quote = F, col.names = T, sep = "\\t")
-        write.table(datalist@reductions\$harmony@cell.embeddings,file = paste0("DataForCelltypist/Cell.embeddings.PCA.csv"), row.names = T, quote = F, col.names = T, sep = "\\t")
-    }
+        write.table(datalist@reductions\$harmony@cell.embeddings,file = paste0("DataForCelltypist/Cell.embeddings.PCA.csv"), row.names = T, quote = F, col.names = T, sep = "\\t")}
     """
 }
 process CellTypist {
+    label 'BigMem'
     publishDir "${params.outdir}/5-Seurat-Cell_Annotation", mode:'copy'
-    errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); return 'retry' }
-    maxRetries 3
+    errorStrategy {
+        if (task.attempt <= 3) {
+            sleep((Math.pow(2, task.attempt) * 200) as long)
+            return 'retry'
+        } else {
+            return 'ignore'
+        }
+    }
+
     
     input:
     path(Datalist)
+    path(SoupXRawCounts)
 
     output:    
     path("StatsCelltypist/")
@@ -671,9 +693,15 @@ process CellTypist {
     def Celltypist_annotation(Dir):
         os.system("mkdir -p StatsCelltypist")
         models.download_models(model = "${params.ModelsCelltypist}".replace(" ","").split(","))
-        adata = sc.read_10x_mtx(Dir)
         metadata = pd.read_csv( Dir + 'Metadata.csv',sep="\\t",low_memory=False)
-        adata.obs = adata.obs.join(metadata)
+        adata = []
+        for Library in metadata['orig.ident'].unique():
+            print(Library)
+            ad = sc.read_10x_mtx(Library)
+            adata.append(ad)
+        adata = sc.concat(adata, join="outer")
+        adata = adata[adata.obs_names.isin(metadata.index)].copy()
+        adata.obs = metadata.loc[adata.obs_names]
         umap = pd.read_csv( Dir + 'Cell.embeddings.UMAP.csv',sep="\\t",low_memory=False)
         pca = pd.read_csv( Dir + 'Cell.embeddings.PCA.csv',sep="\\t",low_memory=False)
         adata.obsm['X_umap'] = umap.to_numpy()
@@ -697,17 +725,24 @@ process CellTypist {
     Celltypist_annotation("DataForCelltypist/")
     """
 }
-process RunAzimuth {
+process Azimuth {
     publishDir "${params.outdir}/5-Seurat-Cell_Annotation", mode:'copy'
-    errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); return 'retry' }
-    maxRetries 3
+        errorStrategy {
+        if (task.attempt <= 3) {
+            sleep((Math.pow(2, task.attempt) * 200) as long)
+            return 'retry'
+        } else {
+            return 'ignore'
+        }
+    }
 
     input:
-    tuple path(Datalist), path(Counts)
+    path(Datalist)
+    path(Counts)
 
-    output:    
-    path("Azimuth/")
+    output:
     path("*.png")
+    path("Azimuth_annotation.tsv"), emit: Azimuth_annotations
 
     script:
     """
@@ -719,7 +754,7 @@ process RunAzimuth {
     library(patchwork)
     library(BPCells)
     })
-    options(future.globals.maxSize = 30 * 1024^3)  # 30 GiB
+    options(future.globals.maxSize = 35 * 1024^3)  # 30 GiB
     plan("multisession", workers = ${task.cpus})
     set.seed(123)
     colors <- clusterExperiment::bigPalette
@@ -734,41 +769,31 @@ process RunAzimuth {
         }
     datalist <- readRDS("${Datalist}")
     datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
-    datalist <- RunAzimuth(datalist, reference = "pbmcref")
+    datalist <- RunAzimuth(datalist, reference = "${params.AzimuthRef}")
     DimPlot(datalist, reduction = "ref.umap", group.by = c("seurat_clusters","predicted.celltype.l2"), label = T, repel = T, raster = F, cols = colors) + seurat_theme()
     ggsave("Azimuth.png",width = 24, height = 9)
-
     AzimuthAnnotation <- as.data.frame(datalist@meta.data[(grepl("predicted.celltype.l", colnames(datalist@meta.data))) & !(grepl("score", colnames(datalist@meta.data)))])
-    gc()
-    system("mkdir -p Azimuth")
-    write.table(AzimuthAnnotation, file = "Azimuth/Azimuth_annotation.tsv", row.names = T, quote = F, col.names = T, sep = "\\t")
-    for (Annotation in names(datalist@meta.data)[names(datalist@meta.data) %in% colnames(AzimuthAnnotation)]){
-        print(Annotation)
-        if (length(unique(datalist@meta.data[[Annotation]])) <= length(colors)){
-                DimPlot(datalist, reduction = "umap", group.by = Annotation, cols = colors, raster = F) + seurat_theme()
-                ggsave(paste0("Azimuth/Azimuth.", Annotation,".png"), width = 9, height = 9)
-            } else {
-                DimPlot(datalist, reduction = "umap", group.by = Annotation, raster = F) + seurat_theme()
-                ggsave(paste0("Azimuth/Azimuth.", Annotation,".png"), width = 9, height = 9) 
-            }
-    }
+    write.table(AzimuthAnnotation, file = "Azimuth_annotation.tsv", row.names = T, quote = F, col.names = T, sep = "\\t")
     """
 }
-process Seurat_Cell_Annotation {
+process SingleR {
+    label 'BigMem'
     publishDir "${params.outdir}/5-Seurat-Cell_Annotation", mode:'copy'
-    errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); return 'retry' }
-    maxRetries 3
+        errorStrategy {
+        if (task.attempt <= 3) {
+            sleep((Math.pow(2, task.attempt) * 200) as long)
+            return 'retry'
+        } else {
+            return 'ignore'
+        }
+    }
 
     input:
-    tuple path(Datalist), path(Counts)
-    file(ModelsCelltypist)
+    path(Datalist)
+    path(Counts)
 
     output:
-    tuple path("${params.Project_Name}.Cell_Annotation.rds"), path(Counts), emit: rds
-    path("*.png")
-    path("Seurat_clusters/")
-    path("SingleR/")
-    path("Celltypist/"), optional: true
+    path("SingleR_Annotation.tsv"), emit: SingleR_annotations
 
     script:
     """
@@ -810,18 +835,18 @@ process Seurat_Cell_Annotation {
     }
     ppSingleR <- function(sobj, cluster){
         sce <- as.SingleCellExperiment(sobj)
-        
+
         pred <- SingleR(test = sce, 
                         ref = list(ref1, ref2, ref3, ref4), 
                         labels = list(ref1\$label.ont, ref2\$label.ont, ref3\$label.ont, ref4\$label.ont), 
                         clusters = sce[[cluster]], BPPARAM = MulticoreParam(1))
-        
+            
         sobj <- SetIdent(sobj, value = cluster)
         new.cluster.ids <- pred\$labels
         names(new.cluster.ids) <- levels(Idents(sobj))
         sobj <- RenameIdents(sobj, new.cluster.ids)
         sobj[[paste0('SingleR_ont', gsub('Seurat_clusters', '', cluster))]] <- Idents(sobj)
-        
+            
         onts <- pred\$labels
         new.cluster.ids <- c()
         for (z in 1:length(onts)) {
@@ -831,27 +856,105 @@ process Seurat_Cell_Annotation {
         names(new.cluster.ids) <- levels(Idents(sobj))
         sobj <- RenameIdents(sobj, new.cluster.ids)
         sobj[[paste0('SingleR', gsub('Seurat_clusters', '', cluster))]] <- Idents(sobj)
-        
+            
         return(sobj)
     }
     CellAnnotations <- function(Sobj){
-        system(paste0("mkdir -p Seurat_clusters"))
-        system(paste0("mkdir -p SingleR"))
         Sobj[["RNA"]]\$data <- Matrix(as.matrix(GetAssayData(Sobj, layer = "data")), sparse = T)
         clusters <- grep('Seurat_clusters', names(Sobj@meta.data), value = T)
         for (cluster in clusters) {
             Sobj <- ppSingleR(Sobj, cluster)
             print(cluster)
-            DimPlot(Sobj,reduction = "umap", group.by = cluster, cols = colors, raster = FALSE) + seurat_theme()
-            ggsave(paste0("Seurat_clusters/",cluster,".png"),heigh=9,width=9)
-        }
-        for (Cluster in names(Sobj@meta.data)[grepl("SingleR_res.",names(Sobj@meta.data))]){
+                    }
+        ###################################################################################################################################################
+        return(Sobj@meta.data)
+    }
+    datalist <- readRDS("${Datalist}")
+    DefaultAssay(datalist) <- "RNA"
+    datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
+    SingleR_Annotation <- CellAnnotations(datalist)
+    gc()
+    SingleR_Annotation <- as.data.frame(SingleR_Annotation[grepl("SingleR_res.",names(SingleR_Annotation))])
+    write.table(SingleR_Annotation, file = "SingleR_Annotation.tsv", row.names = T, quote = F, col.names = T, sep = "\\t")
+    """
+}
+process Seurat_Cell_Annotation {
+    publishDir "${params.outdir}/5-Seurat-Cell_Annotation", mode:'copy'
+
+    input:
+    path(Datalist)
+    path(Counts)
+    file(ModelsCelltypist)
+
+    output:
+    path("${params.Project_Name}.CellTypeAnnotation.rds"), emit: rds
+    path("*.png")
+    path("Seurat_clusters/")
+    path("Azimuth/"), optional: true
+    path("Celltypist/"), optional: true
+    path("SingleR/"), optional: true
+
+    script:
+    """
+    #!/usr/bin/env Rscript
+    suppressPackageStartupMessages({
+    library(Seurat)
+    library(ggplot2)
+    library(dplyr)
+    library(cowplot)
+    library(clustree)
+    library(BiocParallel)
+    library(ggrepel)
+    library(BPCells)
+    })
+    set.seed(123)
+    colors <- clusterExperiment::bigPalette
+    colors <- colors[colors!="black"]
+    seurat_theme <- function(){
+        theme_bw() +
+            theme(panel.background = element_rect(colour = "black", size=0.1), 
+                plot.title = element_text(hjust = 0.5, angle = 0, size = 15, face = "bold", vjust = 1),
+                axis.ticks.length=unit(.2, "cm"), axis.text = element_text(size=11), 
+                panel.grid.major = element_blank(), panel.grid.minor = element_blank(),legend.key = element_rect(colour = NA, fill = NA))
+    }
+    
+    CellAnnotations <- function(Sobj){
+        system(paste0("mkdir -p Seurat_clusters"))
+        for (Cluster in names(Sobj@meta.data)[grepl("Seurat_clusters.",names(Sobj@meta.data))]){
             print(Cluster)
             DimPlot(Sobj,reduction = "umap", group.by = Cluster, cols = colors, raster = FALSE) + seurat_theme()
-            ggsave(paste0("SingleR/SingleR.",Cluster,".png"),width = 9, height = 9)
+            ggsave(paste0("Seurat_clusters/",Cluster,".png"),heigh=9,width=9)
         }
+        if (any(grepl("SingleR_Annotation.tsv", list.files(), fixed = TRUE))) {
+            system(paste0("mkdir -p SingleR"))
+            SingleR_annotation <- read.delim("SingleR_Annotation.tsv",sep = "\\t")
+            Sobj <- AddMetaData(Sobj, SingleR_annotation)
+            for (Cluster in colnames(SingleR_annotation)){
+                print(Cluster)
+                DimPlot(Sobj,reduction = "umap", group.by = Cluster, cols = colors, raster = FALSE) + seurat_theme()
+                ggsave(paste0("SingleR/SingleR.",Cluster,".png"),width = 9, height = 9)
+            }
+            clustree(Sobj,prefix="SingleR_res.",node_text_angle = 15)
+            ggsave(paste0("Clustree_SingleR.png"), width = 21,height = 9)
+        }
+        if (any(grepl("Azimuth_annotation.tsv", list.files(), fixed = TRUE))) {
+            system("mkdir -p Azimuth")
+            Azimuth_annotation <- read.delim("Azimuth_annotation.tsv",sep = "\\t")
+            Sobj <- AddMetaData(Sobj, Azimuth_annotation)
+            for (Annotation in colnames(Azimuth_annotation)){
+                print(Annotation)
+                if (length(unique(Sobj@meta.data[[Annotation]])) <= length(colors)){
+                    DimPlot(Sobj, reduction = "umap", group.by = Annotation, cols = colors, raster = F) + seurat_theme()
+                    ggsave(paste0("Azimuth/Azimuth.", Annotation,".png"), width = 9, height = 9)
+                } else {
+                    DimPlot(Sobj, reduction = "umap", group.by = Annotation, raster = F) + seurat_theme()
+                    ggsave(paste0("Azimuth/Azimuth.", Annotation,".png"), width = 9, height = 9) 
+                }
+            }
+        }
+
         ###################################################################################################################################################
-        if ("${params.ModelsCelltypist}" != ""){
+         if (any(grepl("Celltypist_annotation.csv", list.files(), fixed = TRUE))) {
             system(paste0("mkdir -p Celltypist"))
             for (CelltypistAnnot in list.files("./",pattern="Celltypist_annotation.csv")){
                 CelltypistModel <- read.delim(CelltypistAnnot,sep = ",",row.names=1)
@@ -867,32 +970,27 @@ process Seurat_Cell_Annotation {
             }
         }
         ###################################################################################################################################################
-        clustree(Sobj,prefix="SingleR_res.",node_text_angle = 15)
-        ggsave(paste0("Clustree_SingleR.png"), width = 21,height = 9)
         clustree(Sobj,prefix="Seurat_clusters_res.",node_text_angle = 15)
         ggsave(paste0("Clustree_Seurat_clusters.png"), width = 21,height = 9)
         ###################################################################################################################################################
-        return(Sobj@meta.data)
+        return(Sobj)
     }
     datalist <- readRDS("${Datalist}")
     datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
-    NewMetaData <- CellAnnotations(datalist)
+    datalist <- CellAnnotations(datalist)
     gc()
-    datalist@meta.data <- NewMetaData
-    if ("${params.ModelsCelltypist}" != ""){
-        Idents(datalist) <- "Immune_All_Low_res.0.8"
-    } else {
-        Idents(datalist) <- "SingleR_res.0.8"
-    }
+    Idents(datalist) <- "${params.DefaultAnnotation}"
     datalist[["RNA"]]\$counts <- open_matrix_dir(dir = "${Counts}")
-    saveRDS(datalist, file = "${params.Project_Name}.Cell_Annotation.rds")
+    saveRDS(datalist, file = "${params.Project_Name}.CellTypeAnnotation.rds")
     """
 }
 process CellChat {
+    label 'BigMem'
     publishDir "${params.outdir}/6-Cell_Communication", mode:'copy'
 
     input:
-    tuple path(Datalist), path(Counts)
+    path(Datalist)
+    path(Counts)
 
     output:    
     path("*.pdf")
@@ -964,6 +1062,8 @@ process CellChat {
     pdf(paste0("Heatmap.pdf"))
     netVisual_heatmap(cellChat, color.heatmap = "Reds")
     dev.off()
+    if (file.exists("Rplots.pdf")){
+    system("rm Rplots.pdf")}
     """
 }
 process Seurat_create_object_mouse {
@@ -1120,29 +1220,23 @@ process Seurat_create_object_mouse {
     file.remove("datalist.h5Seurat")
     """
 }
+
 workflow Demultiplex {
     take:
         data
     main:
-        if (params.Freemuxlet != false & params.VCF_Files == ""){
+        if (params.Freemuxlet == true & params.VCF_Files == ""){
             print "Demultiplex activado ${params.NPlex}Plex"
             Freemuxlet(data)
-            Demultiplex_ch = Freemuxlet.out.map{it[1]}.collect()
-        } else {
-            if (params.Freemuxlet != false & params.VCF_Files != ""){
-                VCFs = channel.fromFilePairs(params.VCF_Files, size: -1)
-                CombinedFremuxletDemuxlet(data.combine(VCFs, by: 0))
-                Demultiplex_ch = CombinedFremuxletDemuxlet.out.map{it[1]}.collect()
-            } else {
-                if (params.VCF_Files != ""){
-                    VCFs = channel.fromFilePairs(params.VCF_Files, size: -1)
-                    Demuxlet(data.combine(VCFs, by: 0))
-                    Demultiplex_ch = Demuxlet.out.map{it[1]}.collect()
-                } else {
-                    Demultiplex_ch = channel.of("None").combine(data.map{it[0]}).map{it[0]}
-                }
-            }
-        }
+            Demultiplex_ch = Freemuxlet.out}
+        if (params.Freemuxlet == true & params.VCF_Files != ""){
+            VCFs = channel.fromFilePairs(params.VCF_Files, size: -1)
+            CombinedFremuxletDemuxlet(data.combine(VCFs, by: 0))
+            Demultiplex_ch = CombinedFremuxletDemuxlet.out}
+        if (params.Freemuxlet == false & params.VCF_Files != ""){
+            VCFs = channel.fromFilePairs(params.VCF_Files, size: -1)
+            Demuxlet(data.combine(VCFs, by: 0))
+            Demultiplex_ch = Demuxlet.out}
     emit:
         Demultiplex_ch
 }
@@ -1151,17 +1245,15 @@ workflow ObjectCreation {
         Clean_outs
         DemultiplexData
     main:
+        Channel.empty().set { MetaDataFiles_ch }
         if (params.Sample_metadata != ""){
-            MetaDataFiles_ch = channel.fromPath(params.Sample_metadata)
-            MetaDataFiles_ch.view()
-        } else {
-            MetaDataFiles_ch = channel.of("None")
-        }
-        if (params.Mouse != false){ 
-        Seurat_create_object_mouse(Clean_outs.collect(),DemultiplexData,MetaDataFiles_ch)
+            MetaDataFiles_ch = MetaDataFiles_ch.mix(channel.fromPath(params.Sample_metadata))
+            MetaDataFiles_ch.view()} 
+        if (params.Mouse){ 
+        Seurat_create_object_mouse(Clean_outs.collect(),DemultiplexData,MetaDataFiles_ch.collect())
         scObject = Seurat_create_object_mouse.out.rds
         } else {
-        Seurat_Object_creation(Clean_outs.collect(),DemultiplexData,MetaDataFiles_ch)
+        Seurat_Object_creation(Clean_outs.collect(),DemultiplexData,MetaDataFiles_ch.collect())
         scObject = Seurat_Object_creation.out.rds}
         emit:
             scObject
@@ -1170,15 +1262,23 @@ workflow CellAnnotation {
     take:
         data
         data2
+        data3
     main:
-        if (params.ModelsCelltypist != ""){
-            CellTypist(data2)
-            CellTypistData = CellTypist.out.Celltypist_annotations
-        } else {
-            CellTypistData = channel.of("None")
+        Seurat_Clustering(data,data2)
+        Channel.empty().set { ToolsAnnotations }
+        if (params.Celltypist) {
+            CellTypist(Seurat_Clustering.out.DataForCelltypist, data3)
+            ToolsAnnotations = ToolsAnnotations.mix(CellTypist.out.Celltypist_annotations)
         }
-        Seurat_Cell_Annotation(data,CellTypistData)
-        RunAzimuth(data)
+        if (params.Azimuth) {
+            Azimuth(Seurat_Clustering.out.rds, data2)
+            ToolsAnnotations = ToolsAnnotations.mix(Azimuth.out.Azimuth_annotations)
+        }
+        if (params.SingleR) {
+            SingleR(Seurat_Clustering.out.rds, data2)
+            ToolsAnnotations = ToolsAnnotations.mix(SingleR.out.SingleR_annotations)
+        }
+        Seurat_Cell_Annotation(Seurat_Clustering.out.rds, data2, ToolsAnnotations.collect())
     emit:
         Seurat_Cell_Annotation.out.rds
 }
@@ -1191,8 +1291,17 @@ workflow Mapping {
     emit: 
         Cellranger.out
 }
+workflow CellCommunication { 
+    take:
+        data
+        data2
+    main: 
+        CellChat(data, data2)
+    emit: 
+        CellChat.out
+}
 workflow {
-    if (params.help == true){
+    if (params.help){
         print '\nBasic Usage:\n\tnextflow {Path_to_script}/main.nf --dataDir="{Path_to_Data}/RawData/*" --Project_Name="Chile_03" -c {Path_to_script}/nextflow.config --NPlex=4 -resume'
         print 'Parameters:\n\tMandatories:\n\t\t--dataDir = Sets the input sample table file.\n\t\t--ref_data = Directory with the organism genome processed by cellranger tools.\n\t\t-c = Sets the configuration file.'
         print '\n\tAlternatives:\n\t\t--Project_Name = Sets a custom directory for the project.\n\t\t--Sample_metadata = File with metadata of samples, must be a Tabular delimited file (TSV|TAB),\n\t\t\tand must have a column calles "Sample" matching the names of raw data folders.\n\t\t--Batch = For Seurat analysis, column with the batches. (def. "orig.ident")\n\t\t--Freemuxlet = Set use of Freemuxlet to true for demultiplexing without genotype. (def. false)\n\t\t--ModelsCelltypist = Models for use of celltypist, . (def. "", no celltypist annotation)\n\t\t--VCF_Files = Path to libraries VCFs, to use for genotyping guided demultiplexing. (def. "", no genotyping guided demultiplexing)\n\t\t--MainOutdir = Name of directory to save outputs. (def. "LatinCells_Results/${params.Project_Name}/")\n\t\t--NPlex = Sets the number of samples per run in multiplexed libraries.\n\t\t-resume = Continue an analysis after the last well executed part of a workflow,\n\t\t\tbefore a error or a change made in thee code of a process.[Nextflow parameter].\n\t\t--help = Prints this help message.'
@@ -1207,27 +1316,13 @@ workflow {
         print "Muestras en: ${params.dataDir}"
         Mapping(dataDir_ch,ref_data_ch)
         MappingStats(Mapping.out.map{it[1]}.collect())
-        Demultiplex(Mapping.out)
-        SoupX_scDblFinder(Mapping.out,Demultiplex.out)
-        ObjectCreation(SoupX_scDblFinder.out.clean_reads,Demultiplex.out)
-        Seurat_QC_integration(ObjectCreation.out, SoupX_scDblFinder.out.Stats.collect())
-        CellAnnotation(Seurat_QC_integration.out.rds,Seurat_QC_integration.out.DataForCelltypist)
-        CellChat(CellAnnotation.out)
+        if (params.Demultiplex){Demultiplex(Mapping.out); NPlexData = Mapping.out.join(Demultiplex.out)}else{NPlexData = Mapping.out.combine(channel.of(""))}
+        SoupX_scDblFinder(NPlexData)
+        ObjectCreation(SoupX_scDblFinder.out.clean_reads,NPlexData.map{it[2]}.collect())
+        if (params.QC_Norm){Seurat_QC_integration(ObjectCreation.out, SoupX_scDblFinder.out.Stats.collect())}
+        if (params.CellAnnotation){CellAnnotation(Seurat_QC_integration.out.rds, ObjectCreation.out.map{it[1]}, SoupX_scDblFinder.out.clean_reads.collect())}
+        if (params.CellCommunication){CellCommunication(CellAnnotation.out, ObjectCreation.out.map{it[1]})}
         }
-}
-workflow NoIntegration { 
-    dataDir_ch = channel.fromFilePairs(params.dataDir, type: 'dir', size: -1) 
-    ref_data_ch = channel.fromPath(params.ref_data, type: 'dir') 
-    out_dir = file(params.outdir)
-    out_dir.mkdir() 
-    print "Proyecto: ${params.Project_Name}"
-    print "Directorio de Salida: ${params.outdir}"
-    print "Muestras en: ${params.dataDir}"
-    Mapping(dataDir_ch,ref_data_ch)
-    MappingStats(Mapping.out.map{it[1]}.collect())
-    Demultiplex(Mapping.out)
-    SoupX_scDblFinder(Mapping.out,Demultiplex.out)
-    ObjectCreation(SoupX_scDblFinder.out.clean_reads,Demultiplex.out)
 }
 workflow JustMapping {
     dataDir_ch = channel.fromFilePairs(params.dataDir, type: 'dir', size: -1) 

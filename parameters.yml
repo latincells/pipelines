@@ -1,20 +1,40 @@
 ## params:
-dataDir: "Data/RawData/Chile/03-CZI/02.RawData/*" # Ruta al directorio de datos crudos. | ejemplo: "/media/storage1/Adolfo/SingleCell/Data/RawData/Chile/03-CZI/02.RawData/*"
+dataDir: "Data/RawData/PBMCs/DataFreeze2/*" # Ruta al directorio de datos crudos. | ejemplo: "/media/storage1/Adolfo/SingleCell/Data/RawData/Chile/03-CZI/02.RawData/*"
 ref_data: "Data/References/refdata-gex-GRCh38-2024-A" # Ruta a los datos de referencia. | ejemplo: "/media/storage2/software/refdata-gex-GRCh38-2024-A"
-Project_Name: "Tests" # Nombre del proyecto. | ejemplo: "Chile_03"
-MainOutdir: "LatinCells_Results" # Ruta al directorio de salida principal. | por defecto: "LatinCells_Results"
-# outdir resultante: "LatinCells_Results/Chile_03"
-
+Project_Name: "DataFreeze2" # Nombre del proyecto. | ejemplo: "Chile_03"
+MainOutdir: "LatinCells_Results" # Ruta al directorio de salida principal. | por defecto: "LatinCells_Results"S
 Batch: "orig.ident" # Identificador de Batch en columna de metadata. | Para Seurat por defecto: "orig.ident"
-NPlex: "" # Campo para multiplexación, actualmente vacío. | ejemplo: "4"
-Sample_metadata: "Data/MetaData/CL-UY.tsv" # Ruta al archivo de metadatos de las muestras, actualmente vacío. | ejemplo: "MetaData/metadata.tsv"
+Sample_metadata: "Data/MetaData/LatinCells_MainSamplesTable.20251006.tsv" # Ruta al archivo de metadatos de las muestras, actualmente vacío. | ejemplo: "MetaData/metadata.tsv"
 Mouse: false # Indica si el análisis es para muestras de ratón, actualmente no disponible.
-Freemuxlet: true
-ModelsCelltypist: "Immune_All_Low.pkl, Immune_All_High.pkl" # Nombre de los modelos de Celltypist. Para varios separar por ","  | ejemplo: "Immune_All_Low.pkl, Immune_All_High.pkl, Healthy_Adult_Heart.pkl"
-VCF_Files: "Data/Genotypes/Chile-Uruguay/VCFs/*.vcf.gz"
 
-# Ejemplos de comando para ejecutar el pipeline de Nextflow.
-# 1- Usando este archivo con rutas relativas y ejemplos de valores para los parametros:
-  # nextflow GitHub/pipelines/main.nf -c GitHub/pipelines/nextflow.config -params-file GitHub/pipelines/parameters.yml -resume
-# 2- Escribiendo los parametros en terminal:
-  # nextflow GitHub/pipelines/main.nf --dataDir="/media/storage1/Adolfo/SingleCell/Data/RawData/Chile/03-CZI/02.RawData/*" --Project_Name="Chile_03" -c GitHub/pipelines/nextflow.config -resume --FreemuxletFiles='MetaData/*.clust1.samples' 
+# Demultiplex Info
+Demultiplex: true
+VCF_Files: "Data/Genotypes/DataFreeze2/VCFs/*.vcf.gz"
+Freemuxlet: true
+NPlex: "" # Campo para multiplexación, actualmente vacío. | ejemplo: "4"
+
+# QC and Normalization
+QC_Norm: true
+SCTransform: false
+MinUMIs: 500 # Minimum UMIs per cell default 500
+Max_mtRNA: 15
+MinGenes: 200
+nVariableFeatures: 2000
+PCA_VarianceCovered: 0.9 # 0.9 for 90% of the variance captured by PC Analysis
+
+# Clustering
+MinResolution: 0.4
+MaxResolution: 1.2
+ResolutionIncreaseBy: 0.2
+
+# Celltype Annotation Info
+CellAnnotation: true
+Azimuth: true
+AzimuthRef: "pbmcref" # Referencia de Azimuth. Opciones: "adiposeref","bonemarrowref","fetusref","heartref","humancortexref","kidneyref","lungref","mousecortexref","pancreasref","pbmcref","tonsilref"
+Celltypist: true 
+ModelsCelltypist: "Immune_All_Low.pkl, Immune_All_High.pkl" # Nombre de los modelos de Celltypist. Para varios separar por ","  | ejemplo: "Immune_All_Low.pkl, Immune_All_High.pkl, Healthy_Adult_Heart.pkl"
+SingleR: true
+DefaultAnnotation: "predicted.celltype.l2"
+
+# Cellcommunication
+CellCommunication: true
