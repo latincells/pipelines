@@ -213,16 +213,7 @@ process SoupX_scDblFinder {
         PlotData <- as.data.frame(table(Joined_table\$Demuxlet.BEST.GUESS,Joined_table\$Freemuxlet.BEST.GUESS,Joined_table\$DROPLET.TYPE))
         names(PlotData) <- c("Demuxlet.BEST.GUESS","Freemuxlet.BEST.GUESS","DROPLET.TYPE","Freq")
         PlotData <- PlotData[PlotData\$Freq > 0,]
-        Frequencies <- Joined_table %>% filter(Freemuxlet.DROPLET.TYPE == "SNG") %>% group_by(Freemuxlet.BEST.GUESS, Demuxlet.BEST.GUESS) %>% 
-                        summarise(Frequency = n(), .groups = 'drop')
-        Assigned_identity <- Frequencies %>% 
-                                group_by(Freemuxlet.BEST.GUESS) %>% 
-                                slice_max(Frequency, n = 1) %>% 
-                                ungroup() %>% select(Freemuxlet.BEST.GUESS, Demuxlet.BEST.GUESS)
-        for (i in Assigned_identity\$Freemuxlet.BEST.GUESS){
-            FreemuxletData\$Freemuxlet.BEST.GUESS[FreemuxletData\$Freemuxlet.BEST.GUESS == i] <- Assigned_identity\$Demuxlet.BEST.GUESS[Assigned_identity\$Freemuxlet.BEST.GUESS == i]
-        }
-        names(FreemuxletData) <- c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")
+
         ggplot(as.data.frame(PlotData),
             aes(y = Freq, axis1 = Demuxlet.BEST.GUESS, axis2 = Freemuxlet.BEST.GUESS)) +
             geom_alluvium(aes(fill = DROPLET.TYPE), width = 1/12) +
@@ -232,11 +223,12 @@ process SoupX_scDblFinder {
             scale_fill_manual(values = colors) +
             ggtitle("Demuxlet vs Freemuxlet") + seurat_theme()
         ggsave("DemultiplexingComparison_${sample_id}.png", width = 21, height = 20, dpi = 300)
-        MultiPlexData <- FreemuxletData
+        MultiPlexData <- Joined_table[c("BARCODE","Demuxlet.BEST.GUESS","Demuxlet.DROPLET.TYPE","DROPLET.TYPE")]
+        names(MultiPlexData) <- c("BARCODE","SNG.BEST.GUESS","Demuxlet.DROPLET.TYPE","DROPLET.TYPE")
         rownames(MultiPlexData) <- MultiPlexData\$BARCODE
         MultiPlexData\$BARCODE <- NULL
         data <- AddMetaData(data, metadata = MultiPlexData)
-        data <- subset(data, DROPLET.TYPE == "SNG")
+        data <- subset(data, Demuxlet.DROPLET.TYPE != "AMB" & DROPLET.TYPE != "DBL-DBL" & DROPLET.TYPE != "DBL-AMB")
         StatsTable\$nSNG_Plex <- ncol(data)
     }
     data <- RenameCells(data, add.cell.id = fnames)
@@ -258,19 +250,17 @@ process SoupX_scDblFinder {
     if (file.exists(paste0("${sample_id}",".CombinedDemultiplex.samples"))){
         Combined <- read.delim(paste0("${sample_id}",".CombinedDemultiplex.samples"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
         FreemuxletData <- Combined[!is.na(as.numeric(Combined\$SNG.BEST.GUESS)),]
-        FreemuxletDataSNG <- FreemuxletData[FreemuxletData\$DROPLET.TYPE == "SNG",]
-        DemuxletData <- Combined[is.na(as.numeric(Combined\$SNG.BEST.GUESS)),][c("BARCODE","SNG.BEST.GUESS")]
-        names(DemuxletData) <- c("BARCODE","Identity")
-        Joined_table <- inner_join(FreemuxletDataSNG, DemuxletData, by = "BARCODE")
-        Frequencies <- Joined_table %>% group_by(SNG.BEST.GUESS, Identity) %>% summarise(Frequency = n(), .groups = 'drop')
-        Assigned_identity <- Frequencies %>% group_by(SNG.BEST.GUESS) %>% slice_max(Frequency, n = 1) %>% ungroup() %>% select(SNG.BEST.GUESS, Identity)
-        for (i in Assigned_identity\$SNG.BEST.GUESS){
-            FreemuxletData\$SNG.BEST.GUESS[FreemuxletData\$SNG.BEST.GUESS == i] <- Assigned_identity\$Identity[Assigned_identity\$SNG.BEST.GUESS == i]}
-        MultiPlexData <- FreemuxletData
+        names(FreemuxletData) <- c("BARCODE","Freemuxlet.DROPLET.TYPE","Freemuxlet.BEST.GUESS")
+        DemuxletData <- Combined[is.na(as.numeric(Combined\$SNG.BEST.GUESS)),]
+        names(DemuxletData) <- c("BARCODE","Demuxlet.DROPLET.TYPE","Demuxlet.BEST.GUESS")
+        Joined_table <- merge(DemuxletData, FreemuxletData, by="BARCODE", all=TRUE)
+        Joined_table\$DROPLET.TYPE <- paste(Joined_table\$Demuxlet.DROPLET.TYPE, Joined_table\$Freemuxlet.DROPLET.TYPE, sep = "-")
+        MultiPlexData <- Joined_table[c("BARCODE","Demuxlet.BEST.GUESS","Demuxlet.DROPLET.TYPE","DROPLET.TYPE")]
+        names(MultiPlexData) <- c("BARCODE","SNG.BEST.GUESS","Demuxlet.DROPLET.TYPE","DROPLET.TYPE")
         rownames(MultiPlexData) <- MultiPlexData\$BARCODE
         MultiPlexData\$BARCODE <- NULL
         datalist <- AddMetaData(datalist, metadata = MultiPlexData)
-        datalist <- subset(datalist, DROPLET.TYPE == "SNG")
+        datalist <- subset(datalist,Demuxlet.DROPLET.TYPE != "AMB" & DROPLET.TYPE != "DBL-DBL" & DROPLET.TYPE != "DBL-AMB")
     }
     datalist <- RenameCells(datalist, add.cell.id = fnames)    
     datalist <- removeDoublets(file.path(paste0(fnames, '.txt')), datalist)
@@ -342,22 +332,20 @@ process Seurat_Object_creation {
         if (file.exists(paste0(files[i],".CombinedDemultiplex.samples"))){
                 Combined <- read.delim(paste0(files[i],".CombinedDemultiplex.samples"),sep="\\t")[c("BARCODE","DROPLET.TYPE","SNG.BEST.GUESS")]
                 FreemuxletData <- Combined[!is.na(as.numeric(Combined\$SNG.BEST.GUESS)),]
-                FreemuxletDataSNG <- FreemuxletData[FreemuxletData\$DROPLET.TYPE == "SNG",]
-                DemuxletData <- Combined[is.na(as.numeric(Combined\$SNG.BEST.GUESS)),][c("BARCODE","SNG.BEST.GUESS")]
-                names(DemuxletData) <- c("BARCODE","Identity")
-                Joined_table <- inner_join(FreemuxletDataSNG, DemuxletData, by = "BARCODE")
-                Frequencies <- Joined_table %>% group_by(SNG.BEST.GUESS, Identity) %>% summarise(Frequency = n(), .groups = 'drop')
-                Assigned_identity <- Frequencies %>% group_by(SNG.BEST.GUESS) %>% slice_max(Frequency, n = 1) %>% ungroup() %>% select(SNG.BEST.GUESS, Identity)
-                for (k in Assigned_identity\$SNG.BEST.GUESS){
-                    FreemuxletData\$SNG.BEST.GUESS[FreemuxletData\$SNG.BEST.GUESS == k] <- Assigned_identity\$Identity[Assigned_identity\$SNG.BEST.GUESS == k]}
-                MultiPlexData <- FreemuxletData
+                names(FreemuxletData) <- c("BARCODE","Freemuxlet.DROPLET.TYPE","Freemuxlet.BEST.GUESS")
+                DemuxletData <- Combined[is.na(as.numeric(Combined\$SNG.BEST.GUESS)),]
+                names(DemuxletData) <- c("BARCODE","Demuxlet.DROPLET.TYPE","Demuxlet.BEST.GUESS")
+                Joined_table <- merge(DemuxletData, FreemuxletData, by="BARCODE", all=TRUE)
+                Joined_table\$DROPLET.TYPE <- paste(Joined_table\$Demuxlet.DROPLET.TYPE, Joined_table\$Freemuxlet.DROPLET.TYPE, sep = "-")
+                MultiPlexData <- Joined_table[c("BARCODE","Demuxlet.BEST.GUESS","Demuxlet.DROPLET.TYPE","DROPLET.TYPE")]
+                names(MultiPlexData) <- c("BARCODE","SNG.BEST.GUESS","Demuxlet.DROPLET.TYPE","Combined.DROPLET.TYPE")
                 MultiPlexData\$BARCODE <- paste0(files[i],"_",MultiPlexData\$BARCODE)
                 if ("${params.Sample_metadata}" != ""){
                     MultiPlexData <- merge(MultiPlexData, meta, by.x = "SNG.BEST.GUESS", by.y = "Sample")
                 }
                 rownames(MultiPlexData) <- MultiPlexData\$BARCODE
                 MultiPlexData\$BARCODE <- NULL
-               Loop_scObject <- AddMetaData(Loop_scObject, metadata = MultiPlexData)
+                Loop_scObject <- AddMetaData(Loop_scObject, metadata = MultiPlexData)
                 Multiplex <- "Si"
         }
         if (Multiplex == "No"){
